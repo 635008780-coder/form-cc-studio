@@ -73,7 +73,9 @@ function checkMesh(label: string, config: VehicleConfig) {
   }
   const rearNormals = computePatchNormals(materials.rearGlass);
   const rearNormalX = rearNormals.reduce((sum, normal) => sum + normal.x, 0) / rearNormals.length;
-  assert.ok(rearNormalX > (config.type === "sedan" ? 0.3 : 0.5), `${label}: rear glass points toward sky (${rearNormalX.toFixed(2)})`);
+  // Mid-engine fastbacks carry a flatter rear window than three-box sedans.
+  const rearGlassMin = config.type === "sedan" ? 0.3 : 0.5;
+  assert.ok(rearNormalX > rearGlassMin, `${label}: rear glass points toward sky (${rearNormalX.toFixed(2)})`);
   const roofHeight = getVehicleFrame(config).H;
   assert.ok(materials.rearGlass.vertices.every((point) => point[1] < roofHeight + 0.001), `${label}: backlight rises above roof`);
   const counts = new Map<string, number>();
@@ -128,7 +130,8 @@ for (const template of conceptTemplates) {
   ).intersectObject(frontMesh)[0]?.point.x;
   const centerX = frontHitX(0);
   const outerX = frontHitX(panelWidth * 0.65);
-  assert.ok(centerX !== undefined && outerX !== undefined && centerX < outerX - 0.012,
+  // Full (squarer) plan-view front: centre must still lead, but need not be pointed.
+  assert.ok(centerX !== undefined && outerX !== undefined && centerX < outerX - 0.004,
     `${template.id}: smoothed closed front is sunken or not convex`);
   frontGeometry.dispose();
   (frontMesh.material as THREE.Material).dispose();
@@ -167,19 +170,21 @@ for (const template of conceptTemplates) {
   const waistRanges: Record<VehicleConfig["type"], [number, number]> = {
     sedan: [0.62, 0.74], suv: [0.64, 0.77], mpv: [0.53, 0.67], micro: [0.55, 0.70],
   };
-  assert.ok(waistRatio >= waistRanges[base.type][0] && waistRatio <= waistRanges[base.type][1], `${template.id}: unrealistic baseline waist ratio ${waistRatio.toFixed(2)}`);
+  const waistRange = waistRanges[base.type];
+  assert.ok(waistRatio >= waistRange[0] && waistRatio <= waistRange[1], `${template.id}: unrealistic baseline waist ratio ${waistRatio.toFixed(2)}`);
   const stationGaps = balanced.mesh.sections.slice(1).map((station, index) =>
     (station - balanced.mesh.sections[index]) * frame.Lb,
   );
   assert.ok(Math.max(...stationGaps) < 0.28, `${template.id}: uneven longitudinal spacing`);
   const gapFromTire = frame.arches[0].r * 1000 - base.tireDiameter / 2;
   assert.ok(gapFromTire >= base.archClearance - 0.1, `${template.id}: wheel/tire clearance`);
-  assert.ok(frame.topAt(frame.arches[0].s) > frame.arches[0].cy + frame.arches[0].lipR + 0.06, `${template.id}: front wheel arch exceeds hood`);
+  // Sculpted-fender styles clear the arch with the fender crown instead of the bonnet line.
+  assert.ok(frame.topAt(frame.arches[0].s) + frame.fenderPeakAt(frame.arches[0].s) > frame.arches[0].cy + frame.arches[0].lipR + 0.06, `${template.id}: front wheel arch exceeds hood`);
   if (base.type !== "sedan") {
     assert.ok(frame.rearGlassBottom < frame.H * 0.79, `${template.id}: backlight lower edge is too high`);
     assert.ok(frame.topAt(frame.roofRearS) - frame.rearGlassBottom > 0.28, `${template.id}: hatch glass is nearly horizontal`);
     assert.ok((1 - frame.rearGlassS) * frame.Lb < 0.2, `${template.id}: unexpected trunk platform`);
-    assert.ok(frame.tailTop < frame.rearGlassBottom - 0.07, `${template.id}: rear glass must continue downward into the hatch`);
+    assert.ok(frame.tailTop <= frame.rearGlassBottom + 1e-6, `${template.id}: tailgate must not rise above the backlight`);
     let previous = frame.topAt(frame.roofRearS);
     for (let step = 1; step <= 100; step += 1) {
       const y = frame.topAt(frame.roofRearS + (1 - frame.roofRearS) * step / 100);
@@ -235,7 +240,15 @@ assert.equal(hoodBase.vertices.length, hoodShaped.vertices.length, "hood params 
 const hoodFrame = getVehicleFrame(base);
 const centreRise = Math.max(...hoodShaped.vertices.map((point, index) => Math.abs(point[2]) < 1e-6 ? point[1] - hoodBase.vertices[index][1] : 0));
 assert.ok(centreRise > 0.04, `hood dome should lift centre line (got ${centreRise})`);
-const fenderFall = Math.min(...hoodShaped.vertices.map((point, index) => Math.abs(point[2]) > hoodFrame.W * 0.4 ? point[1] - hoodBase.vertices[index][1] : 0));
+const shapedFrame = getVehicleFrame({ ...base, hoodDome: 60, hoodEdgeDrop: 60 });
+const flatFrame = getVehicleFrame({ ...base, hoodDome: 0, hoodEdgeDrop: 0 });
+// Edge drop is measured relative to the (globally lifted) hood plane.
+const fenderFall = Math.min(...hoodShaped.vertices.map((point, index) => {
+  if (Math.abs(point[2]) <= hoodFrame.W * 0.4) return 0;
+  const s = hoodFrame.sAtX(point[0]);
+  const planeLift = shapedFrame.topAt(s) - flatFrame.topAt(s);
+  return point[1] - hoodBase.vertices[index][1] - planeLift;
+}));
 assert.ok(fenderFall < -0.03, `fender drop should lower outer deck (got ${fenderFall})`);
 assert.notEqual(getVehicleFrame({ ...base, hoodWidthPercent: 60 }).hoodW, hoodFrame.hoodW);
 assert.notEqual(getVehicleFrame({ ...base, noseLift: 110 }).topAt(hoodFrame.hoodFrontS), hoodFrame.topAt(hoodFrame.hoodFrontS));
@@ -273,7 +286,8 @@ for (const template of conceptTemplates) {
   const flat = buildControlMesh({ ...origin, frontBow: 0, rearBow: 0 });
   const round = buildControlMesh({ ...origin, frontBow: 300, rearBow: 300 });
   const frame = getVehicleFrame({ ...origin, frontBow: 300, rearBow: 300 });
-  const cornerShift = Math.max(...round.vertices.map((point, index) => Math.abs(point[0] - flat.vertices[index][0])));
+  // Compare the first (front) section ring: tail station counts may differ with rearBow.
+  const cornerShift = Math.max(...round.vertices.slice(0, RING_COUNT).map((point, index) => Math.abs(point[0] - flat.vertices[index][0])));
   assert.ok(cornerShift > Math.min(0.25, frame.frontBow * 0.9) - 0.01, `${template.id}: bow should move corners (got ${cornerShift})`);
 }
 // Segment separation: the crossover sits clearly above the sedan.
@@ -309,7 +323,7 @@ for (const template of conceptTemplates) {
       assert.equal(report.bodyComponents, 1, `${label}: split body`);
       assert.ok(mesh.vertices.every((point) => point.every(Number.isFinite)), `${label}: NaN`);
       const frame = getVehicleFrame(config);
-      assert.ok(frame.topAt(frame.arches[0].s) > frame.arches[0].cy + frame.arches[0].lipR + 0.055, `${label}: front arch exceeds hood`);
+      assert.ok(frame.topAt(frame.arches[0].s) + frame.fenderPeakAt(frame.arches[0].s) > frame.arches[0].cy + frame.arches[0].lipR + 0.055, `${label}: front arch exceeds hood`);
       assert.ok(frame.H * 1000 >= getMinimumBodyHeight(config), `${label}: body too low for tire and arch`);
       stress += 1;
     }

@@ -1,6 +1,6 @@
 import * as THREE from "three";
 import { MeshBVH } from "three-mesh-bvh";
-import { getVehicleFrame, type VehicleConfig, type VehicleFrame } from "./vehicleModel";
+import { getVehicleFrame, grilleHalfWidth, grilleOutline, grillePatternSegments, type VehicleConfig, type VehicleFrame } from "./vehicleModel";
 
 export interface DetailPlacement {
   position: THREE.Vector3;
@@ -16,6 +16,11 @@ export interface VehicleDetails {
   drl: THREE.BufferGeometry;
   rearLamps: THREE.BufferGeometry;
   darkTrim: THREE.BufferGeometry;
+  lowerGrillePanel: THREE.BufferGeometry;
+  blackout: THREE.BufferGeometry;
+  chrome: THREE.BufferGeometry;
+  lowerGrilleFrame: THREE.BufferGeometry;
+  lowerGrilleBars: THREE.BufferGeometry;
   handles: DetailPlacement[];
   mirrors: DetailPlacement[];
   antenna: DetailPlacement | null;
@@ -216,7 +221,8 @@ export function buildVehicleDetails(config: VehicleConfig, probeGeometry: THREE.
       const c = pillarX[1] ?? b + 0.9;
       addGap(vertical(b, doorBottom, beltAtX(b) - 0.006, side));
       addGap(vertical(c, doorBottom, beltAtX(c) - 0.006, side));
-      addGap(polyline([[c, beltAtX(c) - 0.035], [glassEndX - 0.06, beltAtX(glassEndX) - 0.035]], side, 14), 0.008);
+      // Sliding-door rail stays horizontal under the rear quarter window (even with a belt kick).
+      addGap(polyline([[c, beltAtX(c) - 0.035], [glassEndX - 0.06, beltAtX(c) - 0.035]], side, 14), 0.008);
       doorEndBottomX = c;
       doorEndTopX = c;
       handleXs.push(mix(frontDoorX, b, 0.72), b + 0.14);
@@ -226,17 +232,41 @@ export function buildVehicleDetails(config: VehicleConfig, probeGeometry: THREE.
       doorEndBottomX = b;
       doorEndTopX = b;
       handleXs.push(mix(frontDoorX, b, 0.74));
+    } else if (pillarX.length === 0) {
+      // Two-door coupe: one long door ending ahead of the rear arch.
+      const end = Math.min(rearArch.x - rearArch.lipR - 0.07, frontDoorX + 1.3);
+      addGap(vertical(end, doorBottom, beltAtX(end) - 0.006, side));
+      doorEndBottomX = end;
+      doorEndTopX = end;
+      handleXs.push(mix(frontDoorX, end, 0.8));
     } else {
       const b = pillarX[0];
       addGap(vertical(b, doorBottom, beltAtX(b) - 0.006, side));
       const endTop = type === "suv" && pillarX[1] !== undefined ? pillarX[1] : Math.min(glassEndX - 0.02, rearArch.x - 0.02);
-      const rx = rearArch.x - rearArch.lipR - 0.035;
-      const kneeY = rearArch.cy + (rearArch.lipR + 0.035) * 0.55;
+      // Rear edge: straight down from the belt, then concentric with the wheel arch (offset
+      // outside the lip) down to the sill, the way real rear doors wrap the wheel.
+      const R = rearArch.lipR + 0.03;
       const topY = beltAtX(endTop) - 0.006;
-      addGap(polyline([[rx, doorBottom], [rx, kneeY], [mix(rx, endTop, 0.6), mix(kneeY, topY, 0.55)], [endTop, topY]], side, 8));
-      doorEndBottomX = rx;
+      const dx = endTop - rearArch.x;
+      const points: Array<[number, number]> = [];
+      let bottomX = endTop;
+      if (Math.abs(dx) < R) {
+        const meetY = rearArch.cy + Math.sqrt(R * R - dx * dx);
+        points.push([endTop, topY], [endTop, Math.min(topY - 0.02, meetY)]);
+        const a0 = Math.atan2(Math.min(topY - 0.02, meetY) - rearArch.cy, dx);
+        const a1 = Math.PI - Math.asin(Math.max(-1, Math.min(1, (doorBottom - rearArch.cy) / R)));
+        for (let i = 1; i <= 16; i += 1) {
+          const a = mix(a0, a1, i / 16);
+          points.push([rearArch.x + R * Math.cos(a), rearArch.cy + R * Math.sin(a)]);
+        }
+        bottomX = points[points.length - 1][0];
+      } else {
+        points.push([endTop, topY], [endTop, doorBottom]);
+      }
+      addGap(polyline(points, side, 3));
+      doorEndBottomX = bottomX;
       doorEndTopX = endTop;
-      handleXs.push(mix(frontDoorX, b, 0.72), mix(b, doorEndTopX, 0.6));
+      handleXs.push(mix(frontDoorX, b, 0.72), mix(b, doorEndTopX, 0.55));
     }
     addGap(polyline([[frontDoorX, doorBottom], [doorEndBottomX, doorBottom]], side, 22));
 
@@ -250,7 +280,7 @@ export function buildVehicleDetails(config: VehicleConfig, probeGeometry: THREE.
 
     // Fuel door on right rear quarter
     if (side === 1 && type !== "mpv") {
-      const cx = rearArch.x + 0.02;
+      const cx = Math.max(rearArch.x + 0.02, doorEndTopX + 0.16);
       const cy = beltAtX(cx) - 0.14;
       const ring: Hit[] = [];
       for (let i = 0; i < 20; i += 1) {
@@ -350,7 +380,9 @@ export function buildVehicleDetails(config: VehicleConfig, probeGeometry: THREE.
   };
 
   for (const side of sides) {
-    const quad = config.headlampStyle === "round" ? null : frontQuads[type];
+    // Luxury MPV: slim, wide lamps set outboard of the large grille.
+    const executiveQuad: Quad = [[0.66, -0.13], [0.95, -0.1], [0.95, -0.035], [0.68, -0.055]];
+    const quad = config.headlampStyle === "round" ? null : frame.style.floatingRoof ? executiveQuad : frontQuads[type];
     if (quad) {
       const lampPoint = bilinear(scaleFrontLamp(quad), side, nose);
       const grid = lampGrid(frontHit, lampPoint);
@@ -394,18 +426,64 @@ export function buildVehicleDetails(config: VehicleConfig, probeGeometry: THREE.
     rearLamps.addGrid(grid);
     runs(grid.map((column) => column[0])).forEach((line) => gaps.add(line, 0.005, 0.006));
   }
-  if (type === "sedan" || type === "suv") {
+  if (type === "sedan" || type === "suv" || frame.style.floatingRoof) {
     const barY = tail - (type === "sedan" ? 0.075 : 0.1);
     const grid = lampGrid(rearHit, (u, v) => [mix(-0.34, 0.34, u) * halfW, barY + v * 0.018], 16, 1);
     rearLamps.addGrid(grid, 0.0055);
   }
   const plateY = frame.floor + (tail - frame.floor) * (frame.hatchback ? 0.42 : 0.36);
   darkTrim.addGrid(lampGrid(rearHit, (u, v) => [mix(-0.26, 0.26, u), plateY + mix(-0.06, 0.06, v)], 8, 3), 0.004);
-  if (config.hasGrille) {
-    darkTrim.addGrid(
-      lampGrid(frontHit, (u, v) => [mix(-0.24, 0.24, u), frame.floor + 0.115 + mix(-0.026, 0.026, v)], 12, 3),
-      0.004,
-    );
+  /* Floating roof: gloss-black B/C/D pillars so the window band reads as one glass ribbon,
+     plus a chrome line along the window sill (luxury MPV signature). */
+  const blackout = new PatchBuilder();
+  const chrome = new RibbonBuilder();
+  if (frame.style.floatingRoof) {
+    const band = (s0: number, s1: number) => {
+      for (const side of sides) {
+        blackout.addGrid(Array.from({ length: 9 }, (_, i) => {
+          const s = mix(s0, s1, i / 8);
+          const d = frame.dloAt(s);
+          return Array.from({ length: 6 }, (_, j) => sideHit(frame.xAt(s), mix(d.y7 + 0.004, d.y8 - 0.002, j / 5), side));
+        }), 0.0035);
+      }
+    };
+    const half = frame.glass.pillarHalf * 1.05;
+    frame.glass.pillars.forEach((pillar) => band(pillar - half, pillar + half));
+    const dEnd = Math.min(frame.rearGlassTopS, frame.roofRearS + 0.004);
+    band(frame.glass.end - 0.002, dEnd);
+    for (const side of sides) {
+      const line = runs(Array.from({ length: 61 }, (_, i) => {
+        const s = mix(frame.glass.start + 0.004, dEnd, i / 60);
+        return sideHit(frame.xAt(s), frame.dloAt(s).y7 - 0.012, side);
+      }));
+      line.forEach((points) => chrome.add(points, 0.014, 0.004));
+      // upper chrome surround along the glass top, down the A-pillar to the sill corner
+      const top = runs(Array.from({ length: 81 }, (_, i) => {
+        const s = mix(frame.glass.start + 0.002, dEnd, i / 80);
+        return sideHit(frame.xAt(s), frame.dloAt(s).y8 + 0.008, side);
+      }));
+      top.forEach((points) => chrome.add(points, 0.011, 0.004));
+    }
+  }
+
+  /* Lower intake grille: dark panel + bezel + texture bars, projected on the front face */
+  const lowerPanel = new PatchBuilder();
+  const lowerFrame = new RibbonBuilder();
+  const lowerBars = new RibbonBuilder();
+  const lower = frame.lowerGrille;
+  if (lower) {
+    lowerPanel.addGrid(lampGrid(frontHit, (u, v) => {
+      const yn = mix(lower.openBottom ? -1 : -0.985, 0.985, v);
+      return [mix(-1, 1, u) * grilleHalfWidth(lower, yn), lower.gc + lower.gh * yn];
+    }, 24, 8), 0.0035);
+    const outline = grilleOutline(lower, 72).map(([z, y]) => frontHit(y, z));
+    if (outline.every(Boolean)) lowerFrame.add(outline as Hit[], 0.016, 0.006, !lower.openBottom);
+    const pattern = config.grillePattern === "closed" ? "horizontal" : config.grillePattern;
+    for (const [[z0, y0], [z1, y1]] of grillePatternSegments(pattern, lower, 0.8)) {
+      const a = frontHit(y0, z0);
+      const b = frontHit(y1, z1);
+      if (a && b) lowerBars.add([a, b], pattern === "horizontal" || pattern === "vertical" ? 0.009 : 0.005, 0.0055);
+    }
   }
 
   /* Roof rails / antenna */
@@ -435,6 +513,11 @@ export function buildVehicleDetails(config: VehicleConfig, probeGeometry: THREE.
     drl: drl.build(),
     rearLamps: rearLamps.build(),
     darkTrim: darkTrim.build(),
+    lowerGrillePanel: lowerPanel.build(),
+    blackout: blackout.build(),
+    chrome: chrome.build(),
+    lowerGrilleFrame: lowerFrame.build(),
+    lowerGrilleBars: lowerBars.build(),
   };
   return {
     ...geometries,

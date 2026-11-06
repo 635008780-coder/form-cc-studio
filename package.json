@@ -12,12 +12,12 @@
     "@react-three/drei": "^10.7.9",
     "@react-three/fiber": "^9.8.2",
     "clsx": "2.1.1",
-    "lucide-react": "^1.66.0",
+    "lucide-react": "^1.69.0",
     "react": "19.2.6",
     "react-dom": "19.2.6",
     "tailwind-merge": "3.4.0",
     "three": "^0.187.0",
-    "three-mesh-bvh": "^0.9.17"
+    "three-mesh-bvh": "^0.9.18"
   },
   "devDependencies": {
     "@tailwindcss/vite": "4.1.17",
@@ -26,6 +26,7 @@
     "@types/react-dom": "19.2.3",
     "@vitejs/plugin-react": "5.1.1",
     "tailwindcss": "4.1.17",
+    "tsx": "^4.23.15",
     "typescript": "5.9.3",
     "vite": "7.3.2",
     "vite-plugin-singlefile": "2.3.0"

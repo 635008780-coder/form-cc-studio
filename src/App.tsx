@@ -37,7 +37,7 @@ import {
   type HeadlampStyle,
 } from "./vehicleModel";
 
-const STORAGE_KEY = "form-subd-workbench-v9";
+const STORAGE_KEY = "form-subd-workbench-v11";
 
 const displayModes: Array<{ value: DisplayMode; label: string; short: string }> = [
   { value: "subd", label: "SubD 控制笼", short: "笼" },
@@ -415,7 +415,8 @@ const numericBounds: Record<NumericParameter, [number, number]> = {
   frontHeightOffset: [-120, 120], rearHeightOffset: [-120, 120],
   frontFlare: [0, 100], rearFlare: [0, 100], archLipWidth: [25, 140], archShape: [0, 100],
   frontWheelInset: [0, 100], rearWheelInset: [0, 100], sideSculpt: [0, 100],
-  grilleWidth: [40, 82], grilleHeight: [10, 42], headlampWidth: [60, 130], headlampHeight: [60, 140], bumperDepth: [0, 60],
+  grilleWidth: [40, 82], grilleHeight: [10, 42], grilleOffset: [-150, 150], grilleRoundness: [0, 100], grilleTaper: [-40, 40],
+  lowerGrilleWidth: [30, 95], lowerGrilleHeight: [40, 200], lowerGrilleTaper: [0, 50], headlampWidth: [60, 130], headlampHeight: [60, 140], bumperDepth: [0, 60],
 };
 
 function normalizeTireClearance(config: VehicleConfig) {
@@ -439,7 +440,7 @@ function normalizeTireClearance(config: VehicleConfig) {
     config.roofEndPercent = Math.max(minRoof, Math.min(maxRoof, config.roofEndPercent));
     config.tailHeightPercent = Math.max(60, Math.min(77, config.tailHeightPercent));
   }
-  if (config.type === "mpv") config.hoodGlassBlend = Math.max(90, config.hoodGlassBlend);
+  if (config.type === "mpv" && config.templateId !== "mpv-executive") config.hoodGlassBlend = Math.max(90, config.hoodGlassBlend);
   return config;
 }
 
@@ -495,11 +496,12 @@ function parseVehicleProject(input: unknown): VehicleConfig | null {
   });
   config.wheelDiameterInches = Math.round(config.wheelDiameterInches);
   if (typeof source.hasGrille === "boolean") config.hasGrille = source.hasGrille;
+  if (typeof source.hasLowerGrille === "boolean") config.hasLowerGrille = source.hasLowerGrille;
   if (source.tireStyle === "road" || source.tireStyle === "allTerrain") config.tireStyle = source.tireStyle;
   if (source.cageDensity === "compact" || source.cageDensity === "balanced" || source.cageDensity === "detailed") config.cageDensity = source.cageDensity;
   if (source.headlampStyle === "wide" || source.headlampStyle === "round") config.headlampStyle = source.headlampStyle;
   if (source.grillePattern === "closed") config.hasGrille = false;
-  else if (source.grillePattern === "horizontal" || source.grillePattern === "vertical" || source.grillePattern === "mesh") config.grillePattern = source.grillePattern;
+  else if (["horizontal", "vertical", "mesh", "honeycomb", "diamond"].includes(source.grillePattern as string)) config.grillePattern = source.grillePattern as GrillePattern;
   if (typeof source.paintColor === "string" && /^#[0-9a-f]{6}$/i.test(source.paintColor)) config.paintColor = source.paintColor;
   if (typeof source.templateId === "string" && conceptTemplates.some((template) => template.id === source.templateId && template.type === type)) {
     config.templateId = source.templateId;
@@ -1007,13 +1009,13 @@ function App() {
               {expanded.fascia && (
                 <div className="parameter-fields">
                   <ParameterField label="机盖宽度（占车宽）" value={config.hoodWidthPercent} min={50} max={88} step={1} unit="%" onChange={(value) => updateParameter("hoodWidthPercent", value)} />
-                  <ParameterField label="机盖中央隆起" value={config.hoodDome} min={0} max={90} step={1} unit="mm" onChange={(value) => updateParameter("hoodDome", value)} />
+                  <ParameterField label="机盖饱满度（纵横向拱度）" value={config.hoodDome} min={0} max={90} step={1} unit="级" onChange={(value) => updateParameter("hoodDome", value)} />
                   <ParameterField label="翼子板落差（机盖边线）" value={config.hoodEdgeDrop} min={0} max={100} step={1} unit="mm" onChange={(value) => updateParameter("hoodEdgeDrop", value)} />
-                  <ParameterField label="机盖整体拱度" value={config.hoodShape} min={0} max={100} step={1} unit="%" onChange={(value) => updateParameter("hoodShape", value)} />
-                  <ParameterField label="机盖前缘鼓起" value={config.noseLift} min={0} max={150} step={1} unit="mm" onChange={(value) => updateParameter("noseLift", value)} />
+                  <ParameterField label="机盖整体高度（50 为基准）" value={config.hoodShape} min={0} max={100} step={1} unit="%" onChange={(value) => updateParameter("hoodShape", value)} />
+                  <ParameterField label="机盖倾角（前低后高，40 为基准）" value={config.noseLift} min={0} max={150} step={1} unit="mm" onChange={(value) => updateParameter("noseLift", value)} />
                   <ParameterField label="机盖前缘高度（占车高）" value={config.noseHeightPercent} min={38} max={66} step={1} unit="%" onChange={(value) => updateParameter("noseHeightPercent", value)} />
-                  <ParameterField label="机盖后缘低于腰线" value={config.hoodRearDrop} min={20} max={260} step={5} unit="mm" onChange={(value) => updateParameter("hoodRearDrop", value)} />
-                  <ParameterField label="机盖与风挡衔接" value={config.hoodGlassBlend} min={config.type === "mpv" ? 90 : 0} max={100} step={1} unit="%" onChange={(value) => updateParameter("hoodGlassBlend", value)} />
+                  <ParameterField label="机盖后缘低于风挡根部" value={config.hoodRearDrop} min={20} max={260} step={5} unit="mm" onChange={(value) => updateParameter("hoodRearDrop", value)} />
+                  <ParameterField label="机盖与风挡衔接" value={config.hoodGlassBlend} min={config.type === "mpv" && config.templateId !== "mpv-executive" ? 90 : 0} max={100} step={1} unit="%" onChange={(value) => updateParameter("hoodGlassBlend", value)} />
                   <ParameterField label="车头正面弧度" value={config.frontBow} min={0} max={350} step={5} unit="mm" onChange={(value) => updateParameter("frontBow", value)} />
                   <ParameterField label="车头高度微调" value={config.frontHeightOffset} min={-120} max={120} unit="mm" onChange={(value) => updateParameter("frontHeightOffset", value)} />
                   <ChoiceField<"with" | "without">
@@ -1023,7 +1025,7 @@ function App() {
                       { value: "with", label: "有格栅开口" },
                       { value: "without", label: "无格栅整面" },
                     ]}
-                    onChange={(value) => setConfig((current) => ({ ...current, hasGrille: value === "with" }))}
+                    onChange={(value) => setConfig((current) => ({ ...current, hasGrille: value === "with", hasLowerGrille: value === "with" ? true : current.hasLowerGrille }))}
                   />
                   {config.hasGrille && <ChoiceField<GrillePattern>
                     label="格栅造型"
@@ -1032,11 +1034,28 @@ function App() {
                       { value: "horizontal", label: "横向" },
                       { value: "vertical", label: "竖向" },
                       { value: "mesh", label: "网格" },
+                      { value: "honeycomb", label: "蜂窝" },
+                      { value: "diamond", label: "菱格" },
                     ]}
                     onChange={(grillePattern) => setConfig((current) => ({ ...current, grillePattern }))}
                   />}
                   {config.hasGrille && <ParameterField label="格栅宽度" value={config.grilleWidth} min={40} max={82} step={1} unit="%" onChange={(value) => updateParameter("grilleWidth", value)} />}
                   {config.hasGrille && <ParameterField label="格栅高度" value={config.grilleHeight} min={10} max={42} step={1} unit="%" onChange={(value) => updateParameter("grilleHeight", value)} />}
+                  {config.hasGrille && <ParameterField label="中网上下位置" value={config.grilleOffset} min={-150} max={150} step={5} unit="mm" onChange={(value) => updateParameter("grilleOffset", value)} />}
+                  {config.hasGrille && <ParameterField label="中网圆角（0 方 / 100 椭圆）" value={config.grilleRoundness} min={0} max={100} step={1} unit="%" onChange={(value) => updateParameter("grilleRoundness", value)} />}
+                  {config.hasGrille && <ParameterField label="中网梯形（正值下宽）" value={config.grilleTaper} min={-40} max={40} step={1} unit="%" onChange={(value) => updateParameter("grilleTaper", value)} />}
+                  <ChoiceField<"with" | "without">
+                    label="下进气格栅"
+                    value={config.hasLowerGrille ? "with" : "without"}
+                    options={[
+                      { value: "with", label: "有下开口" },
+                      { value: "without", label: "无" },
+                    ]}
+                    onChange={(value) => setConfig((current) => ({ ...current, hasLowerGrille: value === "with" }))}
+                  />
+                  {config.hasLowerGrille && <ParameterField label="下格栅宽度" value={config.lowerGrilleWidth} min={30} max={95} step={1} unit="%" onChange={(value) => updateParameter("lowerGrilleWidth", value)} />}
+                  {config.hasLowerGrille && <ParameterField label="下格栅高度" value={config.lowerGrilleHeight} min={40} max={200} step={5} unit="mm" onChange={(value) => updateParameter("lowerGrilleHeight", value)} />}
+                  {config.hasLowerGrille && <ParameterField label="下格栅梯形（下宽上窄）" value={config.lowerGrilleTaper} min={0} max={50} step={1} unit="%" onChange={(value) => updateParameter("lowerGrilleTaper", value)} />}
                   <ParameterField label="前包围进深" value={config.bumperDepth} min={0} max={60} step={1} unit="mm" onChange={(value) => updateParameter("bumperDepth", value)} />
                   <ChoiceField<HeadlampStyle>
                     label="前灯形式"
@@ -1049,7 +1068,7 @@ function App() {
                   />
                   <ParameterField label="前灯宽度" value={config.headlampWidth} min={60} max={130} step={1} unit="%" onChange={(value) => updateParameter("headlampWidth", value)} />
                   <ParameterField label="前灯高度" value={config.headlampHeight} min={60} max={140} step={1} unit="%" onChange={(value) => updateParameter("headlampHeight", value)} />
-                  <div className="inline-note"><span className="link-mark" />{!config.hasGrille ? "封闭前脸采用 7 列 × 6 行规则四边面，水平/竖直布线等距，中央微拱" : config.type === "mpv" ? "MPV 机盖与前挡使用连续升高剖面，风挡根部不再保留水平台阶" : "格栅开口沿主车身布线独立成面；机盖与翼子板柔和过渡"}</div>
+                  <div className="inline-note"><span className="link-mark" />{!config.hasGrille ? "封闭前脸采用 7 列 × 6 行规则四边面，所有控制点位于同一连续凸曲面，无内凹框" : config.type === "mpv" && config.templateId === "mpv-executive" ? "豪华商务 MPV：直立高前脸 + 短机盖两段式车头，腰线在滑门后上扬，黑色悬浮立柱与镀铬窗框" : config.type === "mpv" ? "MPV 机盖与前挡使用连续升高剖面，风挡根部不再保留水平台阶" : "格栅开口沿统一凸面前脸布线，带内翻边与饰圈；轮眉通过整体抬升机盖平面保证间隙"}</div>
                 </div>
               )}
             </div>
@@ -1058,7 +1077,7 @@ function App() {
               <SectionHeader title="车尾与整体轮廓" subtitle="REAR / SILHOUETTE" open={expanded.rear} onClick={() => toggleSection("rear")} />
               {expanded.rear && (
                 <div className="parameter-fields">
-                  <ParameterField label="后窗前后投影（占车长）" value={config.rearGlassSpan} min={2} max={18} step={1} unit="%" onChange={(value) => updateParameter("rearGlassSpan", value)} />
+                  <ParameterField label={config.type === "sedan" ? "后窗前后投影（占车长）" : `后窗倾角（每档 2.5°，当前 ${(config.rearGlassSpan * 2.5).toFixed(1)}°）`} value={config.rearGlassSpan} min={2} max={18} step={1} unit={config.type === "sedan" ? "%" : "档"} onChange={(value) => updateParameter("rearGlassSpan", value)} />
                   {config.type === "sedan" && <ParameterField label="后备厢盖末端位置" value={config.tailDeckPercent} min={88} max={98} step={1} unit="%" onChange={(value) => updateParameter("tailDeckPercent", value)} />}
                   <ParameterField label={config.type !== "sedan" ? "后窗下沿高度（占车高）" : "车尾高度（占车高）"} value={config.tailHeightPercent} min={config.type === "sedan" ? 42 : 60} max={config.type === "sedan" ? 78 : 77} step={1} unit="%" onChange={(value) => updateParameter("tailHeightPercent", value)} />
                   <ParameterField label="车尾高度微调" value={config.rearHeightOffset} min={-120} max={120} unit="mm" onChange={(value) => updateParameter("rearHeightOffset", value)} />

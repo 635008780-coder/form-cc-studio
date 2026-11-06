@@ -14,7 +14,9 @@ export interface TopologyReport {
   interiorPoles: number;
 }
 
-const edgeKey = (a: number, b: number) => a < b ? `${a}_${b}` : `${b}_${a}`;
+const edgeKey = (a: number, b: number) => (a < b ? a * 67108864 + b : b * 67108864 + a);
+// Integer cell key for the 3D overlap grid (cells are within +/-5e5 of the origin).
+const cellKey = (x: number, y: number, z: number) => ((x + 500000) * 1000003 + (y + 500000)) * 1000003 + (z + 500000);
 
 function triangleArea(a: Point3, b: Point3, c: Point3) {
   const ux = b[0] - a[0];
@@ -27,7 +29,7 @@ function triangleArea(a: Point3, b: Point3, c: Point3) {
 }
 
 export function analyzeControlMesh(mesh: ControlMesh, shortEdgeMm = 5): TopologyReport {
-  const edges = new Map<string, { a: number; b: number; count: number; direction: number }>();
+  const edges = new Map<number, { a: number; b: number; count: number; direction: number }>();
   const neighbors = new Map<number, Set<number>>();
   let quadFaces = 0;
   let otherFaces = 0;
@@ -83,16 +85,17 @@ export function analyzeControlMesh(mesh: ControlMesh, shortEdgeMm = 5): Topology
   });
 
   const tolerance = 0.0001;
-  const buckets = new Map<string, number[]>();
+  const buckets = new Map<number, number[]>();
   let overlappingPoints = 0;
   neighbors.forEach((_adjacent, vertex) => {
     const point = mesh.vertices[vertex];
-    const cell = point.map((coordinate) => Math.floor(coordinate / tolerance));
+    const cell = [Math.floor(point[0] / tolerance), Math.floor(point[1] / tolerance), Math.floor(point[2] / tolerance)];
     let overlaps = false;
     for (let x = -1; x <= 1 && !overlaps; x += 1) {
       for (let y = -1; y <= 1 && !overlaps; y += 1) {
         for (let z = -1; z <= 1 && !overlaps; z += 1) {
-          const bucket = buckets.get(`${cell[0] + x}_${cell[1] + y}_${cell[2] + z}`) ?? [];
+          const bucket = buckets.get(cellKey(cell[0] + x, cell[1] + y, cell[2] + z));
+          if (!bucket) continue;
           overlaps = bucket.some((other) => {
             const previous = mesh.vertices[other];
             return Math.hypot(point[0] - previous[0], point[1] - previous[1], point[2] - previous[2]) < tolerance;
@@ -101,7 +104,7 @@ export function analyzeControlMesh(mesh: ControlMesh, shortEdgeMm = 5): Topology
       }
     }
     if (overlaps) overlappingPoints += 1;
-    const key = `${cell[0]}_${cell[1]}_${cell[2]}`;
+    const key = cellKey(cell[0], cell[1], cell[2]);
     const bucket = buckets.get(key) ?? [];
     bucket.push(vertex);
     buckets.set(key, bucket);

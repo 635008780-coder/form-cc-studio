@@ -3,26 +3,13 @@ import { Canvas, useThree } from "@react-three/fiber";
 import { ContactShadows, Grid, OrbitControls } from "@react-three/drei";
 import * as THREE from "three";
 import {
-  addBoundaryFlange,
-  controlFacesGeometry,
-  controlPointsGeometry,
-  creaseLinesGeometry,
-  evaluateBody,
-  evaluateVehicleSurfaces,
-  getVehicleFrame,
-  grilleHalfWidth,
-  grillePatternSegments,
   getWheelPositions,
-  makeWheelArchCurve,
-  patchEdgesGeometry,
-  patchToGeometry,
-  subdivide,
   type ControlMesh,
-  type PatchMesh,
   type TireStyle,
   type VehicleConfig,
 } from "./vehicleModel";
-import { buildVehicleDetails, type DetailPlacement } from "./vehicleDetails";
+import { type DetailPlacement } from "./vehicleDetails";
+import { buildVehicleAssets } from "./vehicleAssets";
 
 export type DisplayMode = "subd" | "surface" | "wire" | "boxmod" | "xray";
 export type CameraView = "perspective" | "rearPerspective" | "front" | "rear" | "left" | "right" | "top" | "bottom";
@@ -35,6 +22,8 @@ interface ViewportProps {
   showGrid: boolean;
   showCage: boolean;
   exportGroupRef: React.RefObject<THREE.Group | null>;
+  /** while a slider is moving: level-1 surface, no trims (fast preview) */
+  draft?: boolean;
 }
 
 interface OrbitHandle {
@@ -268,135 +257,9 @@ function Handle({ placement }: { placement: DetailPlacement }) {
   );
 }
 
-function makeGrillePatternGeometry(config: VehicleConfig, grilleSurface: THREE.BufferGeometry) {
-  const geometry = new THREE.BufferGeometry();
-  if (!config.hasGrille) {
-    geometry.setAttribute("position", new THREE.Float32BufferAttribute([], 3));
-    return geometry;
-  }
-  const positions: number[] = [];
-  const frame = getVehicleFrame(config);
-  const material = new THREE.MeshBasicMaterial({ side: THREE.DoubleSide });
-  const target = new THREE.Mesh(grilleSurface, material);
-  target.updateMatrixWorld();
-  const raycaster = new THREE.Raycaster();
-  const xAt = (z: number, y: number) => {
-    raycaster.set(new THREE.Vector3(-frame.L, y, z), new THREE.Vector3(1, 0, 0));
-    const hit = raycaster.intersectObject(target, false)[0];
-    return hit ? hit.point.x - 0.004 : null;
-  };
-  const pattern = config.grillePattern === "closed" ? "horizontal" : config.grillePattern;
-  for (const [[z0, y0], [z1, y1]] of grillePatternSegments(pattern, frame.grille)) {
-    const x0 = xAt(z0, y0);
-    const x1 = xAt(z1, y1);
-    if (x0 !== null && x1 !== null) positions.push(x0, y0, z0, x1, y1, z1);
-  }
-  geometry.setAttribute("position", new THREE.Float32BufferAttribute(positions, 3));
-  material.dispose();
-  return geometry;
-}
-
-/** Flat bars for each pattern segment, oriented perpendicular to the segment in the face plane. */
-function makeGrilleRibGeometry(lines: THREE.BufferGeometry, pattern: VehicleConfig["grillePattern"]) {
-  const position = lines.getAttribute("position");
-  const vertices: number[] = [];
-  const indices: number[] = [];
-  const half = pattern === "horizontal" ? 0.008 : pattern === "vertical" ? 0.006 : pattern === "mesh" ? 0.0035 : 0.003;
-  for (let index = 0; index + 1 < position.count; index += 2) {
-    const a = new THREE.Vector3().fromBufferAttribute(position, index);
-    const b = new THREE.Vector3().fromBufferAttribute(position, index + 1);
-    const dy = b.y - a.y;
-    const dz = b.z - a.z;
-    const length = Math.hypot(dy, dz) || 1;
-    const oy = (-dz / length) * half;
-    const oz = (dy / length) * half;
-    const base = vertices.length / 3;
-    for (const point of [a, b]) {
-      vertices.push(point.x - 0.009, point.y + oy, point.z + oz);
-      vertices.push(point.x - 0.009, point.y - oy, point.z - oz);
-    }
-    indices.push(base, base + 1, base + 2, base + 1, base + 3, base + 2);
-  }
-  const geometry = new THREE.BufferGeometry();
-  geometry.setAttribute("position", new THREE.Float32BufferAttribute(vertices, 3));
-  geometry.setIndex(indices);
-  geometry.computeVertexNormals();
-  return geometry;
-}
-
-/** Bezel path along the real (subdivided) opening edge, not the control ring. */
-function grilleBoundaryCurve(config: VehicleConfig, body: PatchMesh) {
-  if (!config.hasGrille) return null;
-  const frame = getVehicleFrame(config);
-  const shape = frame.grille;
-  const counts = new Map<string, number>();
-  body.faces.forEach((face) => face.forEach((a, k) => {
-    const b = face[(k + 1) % face.length];
-    const key = a < b ? `${a}_${b}` : `${b}_${a}`;
-    counts.set(key, (counts.get(key) ?? 0) + 1);
-  }));
-  const picked = new Set<number>();
-  counts.forEach((count, key) => {
-    if (count !== 1) return;
-    key.split("_").forEach((text) => {
-      const index = Number(text);
-      const [x, y, z] = body.vertices[index];
-      if (x > -frame.L / 2 + 0.3) return;
-      const yn = (y - shape.gc) / shape.gh;
-      if (Math.abs(yn) > 1.35) return;
-      const width = Math.max(0.02, grilleHalfWidth(shape, Math.max(-1, Math.min(1, yn))));
-      if (Math.abs(z) > width * 1.35 + 0.03) return;
-      picked.add(index);
-    });
-  });
-  if (picked.size < 12) return null;
-  const points = [...picked]
-    .map((index) => body.vertices[index])
-    .map((point) => ({ point, angle: Math.atan2((point[1] - shape.gc) / shape.gh, point[2] / Math.max(0.05, shape.gw)) }))
-    .sort((a, b) => a.angle - b.angle)
-    .map(({ point }) => new THREE.Vector3(point[0] - 0.004, point[1], point[2]));
-  return new THREE.CatmullRomCurve3(points, true, "centripetal", 0.5);
-}
-
-function useVehicleAssets(config: VehicleConfig, cage: ControlMesh) {
+function useVehicleAssets(config: VehicleConfig, cage: ControlMesh, draft = false) {
   const shapeKey = JSON.stringify({ ...config, paintColor: "" });
-  const assets = useMemo(() => {
-    const level1 = evaluateBody(cage, 1);
-    const surfaces = evaluateVehicleSurfaces(cage, 2);
-    const level2 = surfaces.body;
-    const glassFaces = [...cage.sideGlass, ...cage.windshield, ...cage.rearGlass];
-    const grillePatch = cage.grille.faces.length
-      ? subdivide(cage.grille.vertices, cage.grille.faces, [], 2)
-      : { vertices: [], faces: [] };
-    const grilleGeometry = cage.grille.faces.length ? patchToGeometry(grillePatch) : new THREE.BufferGeometry();
-    const grillePattern = makeGrillePatternGeometry(config, grilleGeometry);
-    const bodyGeometry = patchToGeometry(level2);
-    const result = {
-      cage,
-      body: bodyGeometry,
-      flange: patchToGeometry(addBoundaryFlange(level2, 0.026, false)),
-      surfaceLines: patchEdgesGeometry(level1.vertices, level1.faces),
-      sideGlass: patchToGeometry(surfaces.sideGlass),
-      windshield: patchToGeometry(surfaces.windshield),
-      rearGlass: patchToGeometry(surfaces.rearGlass),
-      grille: grilleGeometry,
-      grilleBezel: grilleBoundaryCurve(config, level2),
-      grillePattern,
-      grilleRibs: makeGrilleRibGeometry(grillePattern, config.grillePattern),
-      cageLines: patchEdgesGeometry(cage.vertices, [...cage.faces, ...glassFaces]),
-      grilleCage: patchEdgesGeometry(cage.grille.vertices, cage.grille.faces),
-      boxBody: controlFacesGeometry(cage.vertices, cage.faces),
-      boxGlass: controlFacesGeometry(cage.vertices, glassFaces),
-      boxGrille: controlFacesGeometry(cage.grille.vertices, cage.grille.faces),
-      points: controlPointsGeometry(cage.vertices),
-      creases: creaseLinesGeometry(cage),
-      details: buildVehicleDetails(config, bodyGeometry),
-      archCurves: (["front", "rear"] as const).flatMap((axle) =>
-        ([1, -1] as const).map((side) => makeWheelArchCurve(config, axle, side)),
-      ),
-    };
-    return result;
-  }, [shapeKey, cage]);
+  const assets = useMemo(() => buildVehicleAssets(config, cage, draft), [shapeKey, cage, draft]);
 
   useEffect(() => () => {
     Object.values(assets).forEach((value) => {
@@ -408,14 +271,15 @@ function useVehicleAssets(config: VehicleConfig, cage: ControlMesh) {
   return assets;
 }
 
-function VehicleAssembly({ config, controlMesh, mode, showCage, exportGroupRef }: {
+function VehicleAssembly({ config, controlMesh, mode, showCage, exportGroupRef, draft = false }: {
   config: VehicleConfig;
   controlMesh: ControlMesh;
   mode: DisplayMode;
   showCage: boolean;
   exportGroupRef: React.RefObject<THREE.Group | null>;
+  draft?: boolean;
 }) {
-  const assets = useVehicleAssets(config, controlMesh);
+  const assets = useVehicleAssets(config, controlMesh, draft);
   const wheel = useMemo(() => getWheelPositions(config), [controlMesh]);
   const { details } = assets;
   const isBox = mode === "boxmod";
@@ -432,7 +296,7 @@ function VehicleAssembly({ config, controlMesh, mode, showCage, exportGroupRef }
             <mesh geometry={assets.body} visible={!isXray} userData={{ exportIgnore: true }}>
                 <meshStandardMaterial color={isWire ? "#9d9a93" : "#15191a"} roughness={0.9} side={THREE.BackSide} />
             </mesh>
-            <mesh name="BODY_SHELL_EVALUATED" geometry={assets.body} castShadow>
+            <mesh name="BODY_SHELL_EVALUATED" geometry={assets.body} castShadow userData={{ exportRole: "limit" }}>
               <meshPhysicalMaterial
                 color={isWire ? "#eceae3" : paint}
                 metalness={isWire ? 0 : 0.32}
@@ -448,11 +312,11 @@ function VehicleAssembly({ config, controlMesh, mode, showCage, exportGroupRef }
                 polygonOffsetUnits={2}
               />
             </mesh>
-            <mesh name="OPENING_RETURNS" geometry={assets.flange}>
+            <mesh name="OPENING_RETURNS" geometry={assets.flange} userData={{ exportRole: "limit" }}>
               <meshStandardMaterial color={isWire ? "#c9c6be" : "#1c2224"} roughness={0.8} side={THREE.DoubleSide} transparent={isXray} opacity={isXray ? 0.3 : 1} />
             </mesh>
             {[assets.sideGlass, assets.windshield, assets.rearGlass].map((geometry, index) => (
-              <mesh key={index} name={["SIDE_GLASS", "WINDSHIELD", "REAR_GLASS"][index]} geometry={geometry}>
+              <mesh key={index} name={["SIDE_GLASS", "WINDSHIELD", "REAR_GLASS"][index]} geometry={geometry} userData={{ exportRole: "limit" }}>
                 <meshPhysicalMaterial
                   color={isWire ? "#b9cdd6" : "#1b2a31"}
                   metalness={0.3}
@@ -465,7 +329,7 @@ function VehicleAssembly({ config, controlMesh, mode, showCage, exportGroupRef }
               </mesh>
             ))}
             {config.hasGrille && <>
-              <mesh name="GRILLE" geometry={assets.grille}>
+              <mesh name="GRILLE" geometry={assets.grille} userData={{ exportRole: "limit" }}>
                 <meshStandardMaterial color="#14191b" roughness={0.6} metalness={0.3} side={THREE.DoubleSide} />
               </mesh>
               {assets.grilleBezel && <>
@@ -505,12 +369,6 @@ function VehicleAssembly({ config, controlMesh, mode, showCage, exportGroupRef }
             </mesh>
             <mesh geometry={details.darkTrim}>
               <meshStandardMaterial color="#222829" roughness={0.6} side={THREE.DoubleSide} />
-            </mesh>
-            <mesh name="BLACKOUT_PILLARS" geometry={details.blackout}>
-              <meshPhysicalMaterial color="#080b0d" roughness={0.08} metalness={0.25} clearcoat={1} side={THREE.DoubleSide} />
-            </mesh>
-            <mesh name="CHROME_WINDOW_LINE" geometry={details.chrome}>
-              <meshStandardMaterial color="#dfe5e4" metalness={0.95} roughness={0.12} side={THREE.DoubleSide} />
             </mesh>
             <mesh name="LOWER_GRILLE" geometry={details.lowerGrillePanel}>
               <meshStandardMaterial color="#0f1416" roughness={0.7} metalness={0.2} side={THREE.DoubleSide} />
@@ -618,7 +476,7 @@ function VehicleAssembly({ config, controlMesh, mode, showCage, exportGroupRef }
   );
 }
 
-function SceneContent({ config, controlMesh, mode, view, showGrid, showCage, exportGroupRef }: ViewportProps) {
+function SceneContent({ config, controlMesh, mode, view, showGrid, showCage, exportGroupRef, draft }: ViewportProps) {
   const controlsRef = useRef<OrbitHandle | null>(null);
   const height = config.height / 1000;
   const length = config.length / 1000;
@@ -662,7 +520,7 @@ function SceneContent({ config, controlMesh, mode, view, showGrid, showCage, exp
       )}
       <ContactShadows position={[0, 0.01, 0]} opacity={0.38} scale={14} blur={2.6} far={5} resolution={128} color="#050708" />
 
-      <VehicleAssembly config={config} controlMesh={controlMesh} mode={mode} showCage={showCage} exportGroupRef={exportGroupRef} />
+      <VehicleAssembly config={config} controlMesh={controlMesh} mode={mode} showCage={showCage} exportGroupRef={exportGroupRef} draft={draft} />
       <OrbitControls
         ref={controlsRef as React.RefObject<never>}
         makeDefault

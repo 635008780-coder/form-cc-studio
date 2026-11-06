@@ -54,6 +54,8 @@ export interface VehicleConfig {
   /** % : positive = wider at the bottom (trapezoid), negative = wider at the top */
   grilleTaper: number;
   hasLowerGrille: boolean;
+  /** fastback roofs: integrated roof spoiler (roof runs on to a lip above the rear window) */
+  hasSpoiler: boolean;
   /** % of the front half width */
   lowerGrilleWidth: number;
   /** mm */
@@ -174,6 +176,7 @@ const baseConfig: VehicleConfig = {
   grilleRoundness: 45,
   grilleTaper: 10,
   hasLowerGrille: false,
+  hasSpoiler: true,
   lowerGrilleWidth: 70,
   lowerGrilleHeight: 90,
   lowerGrilleTaper: 28,
@@ -209,36 +212,36 @@ export const vehiclePresets: Record<VehicleType, VehicleConfig> = {
     length: 4800, width: 1930, height: 1730, wheelbase: 2880,
     wheelDiameterInches: 20, tireDiameter: 773, tireStyle: "road", wheelArch: 420, archClearance: 35,
     frontAxleFromFront: 880, rearAxleFromTail: 1040,
-    windshieldAngle: 60, windshieldPosition: 1520, hoodShape: 54, beltline: 1210,
-    beltlineSlope: 35, windowHeightPercent: 88, doorSplitPercent: 52,
-    sideTrend: 60, surfaceHardness: 36, groundClearance: 240,
-    roofEndPercent: 87, roofWidthPercent: 76,
+    windshieldAngle: 60, windshieldPosition: 1240, hoodShape: 54, beltline: 1110,
+    beltlineSlope: 10, windowHeightPercent: 82, doorSplitPercent: 50,
+    sideTrend: 62, surfaceHardness: 24, groundClearance: 240,
+    roofEndPercent: 87, roofWidthPercent: 72,
     frontFlare: 36, rearFlare: 42, archLipWidth: 70, archShape: 18,
     frontWheelInset: 20, rearWheelInset: 20, sideSculpt: 38,
     hasGrille: false, grilleWidth: 64, grilleHeight: 28, grillePattern: "mesh", grilleRoundness: 30, grilleTaper: 8, lowerGrilleHeight: 110,
     headlampWidth: 100, headlampHeight: 90, bumperDepth: 38,
-    hoodWidthPercent: 82, hoodDome: 30, hoodEdgeDrop: 16, noseLift: 45, hoodRearDrop: 60,
+    hoodWidthPercent: 80, hoodDome: 55, hoodEdgeDrop: 18, noseLift: 50, hoodRearDrop: 60,
     hoodGlassBlend: 10, frontBow: 230, rearBow: 170,
-    noseHeightPercent: 57, tailHeightPercent: 72, noseWidthPercent: 84, tailWidthPercent: 89,
-    rearGlassSpan: 14, tailDeckPercent: 99, paintColor: "#aebbbd",
+    noseHeightPercent: 57, tailHeightPercent: 72, noseWidthPercent: 80, tailWidthPercent: 89,
+    rearGlassSpan: 16, tailDeckPercent: 99, paintColor: "#aebbbd",
   }),
   // Cab-forward van – very short hood flowing straight into the windshield
   mpv: makePreset({
     type: "mpv", templateId: "mpv-van",
-    length: 4420, width: 1685, height: 1770, wheelbase: 2720,
+    length: 4420, width: 1695, height: 1800, wheelbase: 2720,
     wheelDiameterInches: 14, tireDiameter: 596, tireStyle: "road", wheelArch: 340, archClearance: 35,
     frontAxleFromFront: 790, rearAxleFromTail: 910,
-    windshieldAngle: 46, windshieldPosition: 760, hoodShape: 45, beltline: 1060,
+    windshieldAngle: 40, windshieldPosition: 600, hoodShape: 45, beltline: 1060,
     beltlineSlope: 0, windowHeightPercent: 94, doorSplitPercent: 47,
     sideTrend: 40, surfaceHardness: 70, groundClearance: 190,
-    roofEndPercent: 91, roofWidthPercent: 90,
+    roofEndPercent: 91, roofWidthPercent: 92,
     frontFlare: 0, rearFlare: 0, archLipWidth: 28, archShape: 40,
     frontWheelInset: 15, rearWheelInset: 15, sideSculpt: 0,
     hasGrille: false, grilleWidth: 60, grilleHeight: 17, grillePattern: "horizontal", grilleRoundness: 40, grilleTaper: 0, lowerGrilleHeight: 100,
-    headlampWidth: 112, headlampHeight: 105, bumperDepth: 28,
-    hoodWidthPercent: 82, hoodDome: 14, hoodEdgeDrop: 10, noseLift: 25, hoodRearDrop: 40,
+    headlampWidth: 112, headlampHeight: 105, bumperDepth: 12,
+    hoodWidthPercent: 82, hoodDome: 14, hoodEdgeDrop: 3, noseLift: 25, hoodRearDrop: 40,
     hoodGlassBlend: 100, frontBow: 90, rearBow: 40,
-    noseHeightPercent: 52, tailHeightPercent: 64, noseWidthPercent: 90, tailWidthPercent: 94,
+    noseHeightPercent: 50, tailHeightPercent: 64, noseWidthPercent: 90, tailWidthPercent: 94,
     rearGlassSpan: 2, tailDeckPercent: 99, paintColor: "#d9d8cf",
   }),
   // Cube-shaped city micro car
@@ -391,8 +394,10 @@ function monotone(keysIn: Array<[number, number]>) {
   };
 }
 
+/** Numeric undirected edge key (no string allocation; valid for < 2^26 vertices). */
+const EDGE_KEY_BASE = 67108864;
 function edgeKey(a: number, b: number) {
-  return a < b ? `${a}_${b}` : `${b}_${a}`;
+  return a < b ? a * EDGE_KEY_BASE + b : b * EDGE_KEY_BASE + a;
 }
 
 function average(points: Point3[]): Point3 {
@@ -450,12 +455,20 @@ interface TypeStyle {
   dPillar?: number;
   /** fenders may peak this far (m) above a lower 'valley' bonnet */
   fenderRise?: number;
-  /** blacked-out B/C/D pillars + chrome window line (luxury MPV "floating roof") */
-  floatingRoof?: boolean;
   /** MPV with a distinct short bonnet instead of the one-motion nose */
   twoBoxFront?: boolean;
   /** beltline rise (m) behind the sliding door: rear quarter window steps up */
   beltKick?: number;
+  /** straight raked A-pillar / windshield with only a small header radius (vans) */
+  straightScreen?: boolean;
+  /** hatchback with a fastback roof: roof peaks over the B-pillar and falls in one parabola */
+  fastback?: boolean;
+  /** progressive upward sweep (m) of the beltline towards the tail (coupe C-pillar) */
+  beltArc?: number;
+  /** scale for body feature creases (hood edges, nose corner, shoulder); < 1 = softer */
+  creaseScale?: number;
+  /** SUV rear door top edge (C-pillar) relative to the rear axle, m (+ = behind) */
+  cFromAxle?: number;
 }
 
 function shapeWidthKeys(keys: Array<[number, number]>, noseWidth: number, tailWidth: number) {
@@ -574,6 +587,23 @@ const typeStyles: Record<VehicleType, TypeStyle> = {
 
 /** Per-template style overrides (plan shape, pillar layout, roof form). */
 const templateStyles: Record<string, Partial<TypeStyle>> = {
+  // Modern rugged SUV: C-pillar just ahead of the rear axle, large quarter window behind.
+  "suv-rugged": {
+    cFromAxle: -0.04,
+  },
+  // Round luxury SUV, coupe-SUV fastback: roof peaks over the B-pillar and falls in one
+  // parabola to a short tailgate; rising beltline, tapered ends with rear haunches, soft nose.
+  "suv-rounded": {
+    fastback: true,
+    beltArc: 0,
+    cFromAxle: 0.06,
+    creaseScale: 0.55,
+    railDrop: 0.06,
+    shoulder: 0.965,
+    featureDrop: 0.12,
+    widthKeys: [[0, 0.79], [0.05, 0.87], [0.15, 0.945], [0.3, 0.98], [0.45, 0.985], [0.62, 0.995], [0.77, 1], [0.88, 0.98], [0.96, 0.92], [1, 0.82]],
+    dPillar: 0.1,
+  },
   // Utility van: slab sides, flat roof, square plan, thin D-pillar.
   "mpv-van": {
     roofSag: 0.006,
@@ -582,19 +612,20 @@ const templateStyles: Record<string, Partial<TypeStyle>> = {
     featureDrop: 0.15,
     widthKeys: [[0, 0.9], [0.06, 0.95], [0.17, 0.985], [0.3, 1], [0.7, 1], [0.9, 1], [0.97, 0.985], [1, 0.93]],
     dPillar: 0.05,
+    straightScreen: true,
+    // one-motion nose: soft bonnet edges so face, bonnet and screen read as one slope
+    creaseScale: 0.25,
   },
-  // Executive (luxury) MPV: tall upright face with a short, distinct bonnet (two-box front
-  // instead of the van's one-motion nose), long flat roof, slab-but-crowned sides,
-  // blacked-out pillars (floating roof) and chrome window line.
+  // Executive MPV: independent front compartment (clear bonnet), strongly raked A-pillar,
+  // arched roof and long, low proportions; crowned sides with a kicked belt.
   "mpv-executive": {
     cowlRise: 0.12,
-    roofSag: 0.014,
+    roofSag: 0.045,
     railDrop: 0.05,
     shoulder: 0.972,
     featureDrop: 0.13,
     widthKeys: [[0, 0.86], [0.05, 0.93], [0.15, 0.975], [0.28, 0.995], [0.4, 1], [0.8, 1], [0.92, 0.985], [0.97, 0.96], [1, 0.9]],
     dPillar: 0.11,
-    floatingRoof: true,
     twoBoxFront: true,
     beltKick: 0.07,
   },
@@ -606,15 +637,24 @@ const templateStyles: Record<string, Partial<TypeStyle>> = {
     widthKeys: [[0, 0.9], [0.07, 0.95], [0.18, 0.985], [0.33, 1], [0.7, 1], [0.86, 0.995], [0.95, 0.975], [1, 0.92]],
     dPillar: 0.2,
   },
-  // Round city car: tapered ends, arched roof.
+  // Round city car, fastback hatch: tapered ends with rear haunches, roof falls in one
+  // parabola, rising beltline and soft nose/bonnet corners.
   "micro-city": {
+    fastback: true,
+    beltArc: 0,
+    creaseScale: 0.5,
     roofSag: 0.045,
     railDrop: 0.06,
     shoulder: 0.96,
-    widthKeys: [[0, 0.8], [0.07, 0.9], [0.18, 0.96], [0.33, 0.99], [0.5, 1], [0.67, 0.995], [0.83, 0.98], [0.95, 0.92], [1, 0.8]],
-    dPillar: 0.13,
+    widthKeys: [[0, 0.78], [0.07, 0.89], [0.18, 0.955], [0.33, 0.985], [0.5, 0.99], [0.68, 1], [0.83, 0.985], [0.94, 0.93], [1, 0.8]],
+    dPillar: 0.1,
   },
 };
+
+/** Templates with a fastback roof (they offer the integrated roof spoiler option). */
+export function isFastbackTemplate(templateId: string) {
+  return templateStyles[templateId]?.fastback === true;
+}
 
 /* ------------------------------------------------------------------ */
 /* Vehicle frame – all derived design lines                            */
@@ -790,12 +830,18 @@ export interface VehicleFrame {
   roofRearS: number;
   rearGlassS: number;
   rearGlassTopS: number;
+  /** top edge of the windshield (level with the top of the side glass) */
+  windshieldTopS: number;
+  /** integrated spoiler lip station (fastback with spoiler), -1 otherwise */
+  spoilerTipS: number;
   tailS0: number;
   tailFillet: (s: number) => { z: number; y: number };
   shoulderAt: (s: number) => number;
   pillarAt: (s: number) => number;
   dloAt: (s: number) => DloStation;
   archWarp: (x: number, strength: number) => number;
+  /** plan-view bow of the glass edges: x offset (m) for a point at station s and lateral z */
+  glassBowX: (s: number, z: number) => number;
   fenderPeakAt: (s: number) => number;
   tailDeckS: number;
   hatchback: boolean;
@@ -833,14 +879,20 @@ export function getVehicleFrame(config: VehicleConfig): VehicleFrame {
   const hatchback = config.type !== "sedan";
 
   const cowlS = clamp(config.windshieldPosition / config.length, 0.12, 0.55);
-  const cowlY = Math.min(H - 0.2, belt + style.cowlRise);
+  // Windshield base sits level with the side-glass sill (beltline + 14 mm at the cowl);
+  // +18 mm compensates the bonnet crown so the lowest glass points line up.
+  const sillAtCowl = belt + (cowlS - 0.45) * (config.beltlineSlope / 1000 + 0.05 * ((config.sideTrend - 50) / 50)) + 0.014;
+  const cowlY = Math.min(H - 0.2, sillAtCowl + 0.018);
   const rise = H - 0.035 - cowlY;
   const run = (rise * Math.tan((clamp(config.windshieldAngle, 20, 80) * Math.PI) / 180)) / Lb;
   const rearBelt = belt + 0.5 * (config.beltlineSlope / 1000 + 0.05 * trend);
+  // Rear window base is level with the rear end of the side-glass sill (beltline + 14 mm;
+  // +16 mm compensates the SubD limit pulling the glass corners down).
+  const rearBeltFull = belt + 0.55 * (config.beltlineSlope / 1000 + 0.05 * trend) + (style.beltArc ?? 0);
+  void rearBelt;
   const rearGlassY = hatchback
-    ? clamp(config.tailHeightPercent / 100 * H + config.rearHeightOffset / 1000,
-      Math.max(rearBelt + 0.065, H * 0.6), Math.min(H * 0.77, H - 0.3))
-    : clamp(rearBelt + 0.055, H * 0.58, H - 0.25);
+    ? clamp(rearBeltFull + 0.03, H * 0.5, H - 0.3)
+    : clamp(rearBelt + 0.03, H * 0.55, H - 0.25);
   // Hatchbacks (SUV / MPV / micro), side view, one continuous convex line:
   //   roof -> backlight (chord rake = rearGlassSpan x 2.5 deg from vertical, rolling over
   //   from the roof and steepening downwards) -> lower tailgate: a circular arc that keeps
@@ -848,9 +900,17 @@ export function getVehicleFrame(config: VehicleConfig): VehicleFrame {
   // There is no horizontal shelf behind the glass, so the tail never "sticks out" below it.
   // roofEndPercent sets the height of the tailgate band below the glass. Near-vertical
   // backlights (vans) collapse the band: glass and tailgate become one upright plane.
-  const hatchRake = (clamp(2.5 * config.rearGlassSpan, 2, 45) * Math.PI) / 180;
-  const hatchDrop = Math.max(0.1, H - style.roofSag - rearGlassY);
-  const glassEndRatio = 1.55;
+  // Fastback: the rake parameter sets the chord of the whole roof descent (peak -> glass
+  // base); the descent is the parabola y = H - drop * t^2, so its end slope is 2x the chord.
+  const fastback = hatchback && style.fastback === true;
+  // Integrated spoiler (fastbacks): the roof runs on almost flat to a lip, the rear window
+  // drops from under the lip at a more upright rake (rearGlassSpan x 2.5 deg from
+  // vertical), so the spoiler reads as the extension of the roof, not an add-on.
+  const spoiler = fastback && config.hasSpoiler !== false;
+  const hatchRake = ((spoiler ? clamp(2.5 * config.rearGlassSpan, 22, 60)
+    : fastback ? clamp(2.5 * config.rearGlassSpan + 18, 40, 70) : clamp(2.5 * config.rearGlassSpan, 2, 45)) * Math.PI) / 180;
+  const hatchDrop = Math.max(0.1, H - (fastback ? 0 : style.roofSag) - rearGlassY);
+  const glassEndRatio = spoiler ? 1.25 : fastback ? 2 : 1.55;
   const glassEndAngle = Math.atan(Math.tan(hatchRake) / glassEndRatio);
   const tailEndAngle = glassEndAngle * 0.3;
   const arcRunPerDrop = (Math.cos(tailEndAngle) - Math.cos(glassEndAngle))
@@ -860,23 +920,51 @@ export function getVehicleFrame(config: VehicleConfig): VehicleFrame {
   // The tailgate band may never pull the tail top below the beltline band: the shoulder,
   // feature line and sill must wrap round the rear corner at their own height (as on real
   // SUVs), otherwise they dive in the last section and pinch the D-pillar corner.
-  const rearBeltEnd = belt + 0.55 * (config.beltlineSlope / 1000 + 0.05 * trend);
+  const rearBeltEnd = rearBeltFull;
   const hatchBand = Math.min(bandTarget * bandFade, Math.max(0, rearGlassY - floor - 0.32),
-    Math.max(0, rearGlassY - (rearBeltEnd + 0.095)));
+    Math.max(0, rearGlassY - (rearBeltEnd + (style.fastback ? -0.045 : 0.095))));
   const hatchArcR = hatchBand / Math.max(1e-6, Math.sin(glassEndAngle) - Math.sin(tailEndAngle));
   const hatchArcRun = hatchBand * arcRunPerDrop;
   const hatchGlassS = clamp(1 - hatchArcRun / Lb, 0.95, 1);
   const hatchRoofRear = hatchGlassS - (hatchDrop * Math.tan(hatchRake)) / Lb;
+  // Estimated top of the side glass (roof - rail drop - pillar band) = top of the rear window.
+  const winFractionEarly = clamp((clamp(config.windowHeightPercent / 100, 0.55, 0.98) - 0.55) / 0.43, 0, 1);
+  const spoilerGlassTop = H - style.railDrop - mix(0.11, 0.045, winFractionEarly) * 0.97 + 0.008;
+  const spoilerGlassRun = Math.max(0.05, spoilerGlassTop - rearGlassY) * Math.tan(hatchRake);
+  const spoilerG0 = hatchGlassS - spoilerGlassRun / Lb;
+  const spoilerTip = spoilerG0 - 0.04 / Lb;
+  const spoilerExtDrop = 0.025;
   const desiredRoofRear = hatchback
-    ? Math.max(hatchRoofRear, cowlS + 0.16)
+    ? Math.max(spoiler ? spoilerTip : hatchRoofRear, cowlS + 0.16)
     : Math.max(clamp(config.roofEndPercent / 100, 0.62, 0.79), cowlS + 0.16);
   const roofFrontS = clamp(cowlS + run, cowlS + 0.04, desiredRoofRear - 0.12);
-  const roofRearS = hatchback
-    ? clamp(Math.max(desiredRoofRear, roofFrontS + 0.12), 0.62, hatchGlassS - 0.012)
-    : clamp(Math.max(desiredRoofRear, roofFrontS + 0.12), 0.62, 0.79);
+  // For fastbacks this is the roof peak; the backlight header then sits part-way down the slope.
+  const roofPeakS = spoiler
+    ? clamp(mix(roofFrontS, spoilerTip, 0.45), roofFrontS + 0.08, spoilerTip - 0.1)
+    : hatchback
+      ? clamp(Math.max(desiredRoofRear, roofFrontS + 0.12), fastback ? 0.45 : 0.62, hatchGlassS - 0.012)
+      : clamp(Math.max(desiredRoofRear, roofFrontS + 0.12), 0.62, 0.79);
   const rearGlassS = hatchback
     ? hatchGlassS
-    : clamp(roofRearS + clamp(config.rearGlassSpan, 6, 18) / 100, roofRearS + 0.055, 0.91);
+    : clamp(roofPeakS + clamp(config.rearGlassSpan, 6, 18) / 100, roofPeakS + 0.055, 0.91);
+  const roofRearS = spoiler ? spoilerTip : fastback ? roofPeakS + 0.42 * (rearGlassS - roofPeakS) : roofPeakS;
+  const spoilerTipY = H - spoilerExtDrop;
+  const spoilerGlassChord = (rearGlassY - spoilerGlassTop) / Math.max(1e-4, rearGlassS - spoilerG0);
+  const spoilerExtSlope = (-2 * spoilerExtDrop) / Math.max(1e-4, spoilerTip - roofPeakS);
+  const fastbackDescent = (s: number) => {
+    if (spoiler) {
+      if (s <= spoilerTip) {
+        const u = clamp((s - roofPeakS) / Math.max(1e-4, spoilerTip - roofPeakS), 0, 1);
+        return H - spoilerExtDrop * u * u;
+      }
+      if (s <= spoilerG0) {
+        return hermiteSegment(s, spoilerTip, spoilerG0, spoilerTipY, spoilerGlassTop, spoilerExtSlope, 0.8 * spoilerGlassChord);
+      }
+      return hermiteSegment(s, spoilerG0, rearGlassS, spoilerGlassTop, rearGlassY, 0.8 * spoilerGlassChord, 1.25 * spoilerGlassChord);
+    }
+    const t = clamp((s - roofPeakS) / Math.max(1e-4, rearGlassS - roofPeakS), 0, 1);
+    return H - (H - rearGlassY) * t * t;
+  };
   const tailDeckS = hatchback
     ? mix(rearGlassS, 1, 0.52)
     : clamp(config.tailDeckPercent / 100, rearGlassS + 0.025, 0.985);
@@ -900,7 +988,7 @@ export function getVehicleFrame(config: VehicleConfig): VehicleFrame {
   const hoodFrontS = Math.min(0.05, hoodEndS * 0.4);
   const tailTopY = hatchback
     ? rearGlassY - hatchBand
-    : Math.min(config.tailHeightPercent / 100 * H + config.rearHeightOffset / 1000, rearGlassY - 0.10);
+    : Math.min(config.tailHeightPercent / 100 * H + config.rearHeightOffset / 1000, rearGlassY - 0.06);
   const tailDeckY = hatchback
     ? mix(rearGlassY, tailTopY, 0.52)
     : clamp(belt - style.tailDrop + config.rearHeightOffset / 2000, floor + 0.28, rearGlassY - 0.035);
@@ -933,14 +1021,14 @@ export function getVehicleFrame(config: VehicleConfig): VehicleFrame {
     }
     return hermiteSegment(s, cowlS, roofFrontS, cowlY, H - 0.03, plenumEnd, screenChord * 0.9);
   };
-  const roofMid = (roofFrontS + roofRearS) / 2;
+  const roofMid = fastback ? roofPeakS : (roofFrontS + roofRearS) / 2;
   const roofY = H - 0.03;
-  const rearRoofY = H - style.roofSag;
+  const rearRoofY = fastback ? fastbackDescent(roofRearS) : H - style.roofSag;
   // The backlight starts a little below the roof edge so a body-colour header (~75 mm,
   // measured along the surface) is left above it, like a real tailgate frame.
   const glassSpanS = Math.max(1e-3, rearGlassS - roofRearS);
   const glassArc = Math.hypot(glassSpanS * Lb, Math.max(0.05, rearRoofY - rearGlassY));
-  const rearGlassTopS = roofRearS + Math.max(clamp(0.075 / glassArc, 0.05, 0.4) * glassSpanS, Math.min(0.4 * glassSpanS, 0.0058));
+  const rearGlassTopFallback = roofRearS + Math.max(clamp(0.075 / glassArc, 0.05, 0.4) * glassSpanS, Math.min(0.4 * glassSpanS, 0.0058));
   const roofAt = monotone([
     [roofFrontS, roofY],
     [roofMid, H],
@@ -958,19 +1046,39 @@ export function getVehicleFrame(config: VehicleConfig): VehicleFrame {
   const flowSpan = Math.max(0.03, cowlS);
   // A one-motion bonnet is only gently crowned, so it keeps rising into the windshield and
   // the bonnet-to-glass angle stays small (noseLift still scales the crown).
-  const flowFullness = clamp(Math.max(0.55 * hoodFullness, 1 - (0.6 * screenChordS * flowSpan) / flowRise), 0, 1);
+  // Straight-screen vans: an almost straight bonnet so front face, bonnet and A-pillar read
+  // as one continuous slope (no crown that would kink at the cowl).
+  const flowFullness = style.straightScreen ? 0.06
+    : clamp(Math.max(0.55 * hoodFullness, 1 - (0.6 * screenChordS * flowSpan) / flowRise), 0, 1);
   const flowHoodEnd = (flowRise * (1 - flowFullness)) / flowSpan;
   const flowHood = (s: number) => {
     if (s >= cowlS) return cowlY + flowHoodEnd * (s - cowlS);
     const t = clamp(s / flowSpan, 0, 1);
     return nose + flowRise * t + flowRise * flowFullness * t * (1 - t);
   };
-  const flowScreen = (s: number) => (s >= cowlS
-    ? hermiteSegment(s, cowlS, roofFrontS, cowlY, roofY, screenBase, roofJoinSlope)
-    : cowlY + screenBase * (s - cowlS));
-  const filletSoft = 0.03 + 0.12 * clamp(blendStrength, 0, 1);
+  // Straight screen: a plane from the cowl to the header, rounded only over the last
+  // ~120 mm into the roof (small header radius), as on real vans.
+  const straight = style.straightScreen === true;
+  // End the windshield on the roof curve's actual starting slope (the roof is a PCHIP whose
+  // end slope differs from its chord), so the header is tangent-continuous.
+  const roofStartSlope = (roofAt(roofFrontS + 1e-4) - roofAt(roofFrontS)) / 1e-4;
+  const headerS = Math.max(cowlS + 0.35 * (roofFrontS - cowlS), roofFrontS - 0.32 / Lb);
+  const flowScreen = (s: number) => {
+    if (straight) {
+      if (s <= headerS) return cowlY + screenChordS * (s - cowlS);
+      return hermiteSegment(s, headerS, roofFrontS, cowlY + screenChordS * (headerS - cowlS), roofY, screenChordS, roofStartSlope);
+    }
+    return s >= cowlS
+      ? hermiteSegment(s, cowlS, roofFrontS, cowlY, roofY, screenBase, roofStartSlope)
+      : cowlY + screenBase * (s - cowlS);
+  };
+  const filletSoft = straight ? 0.06 : 0.03 + 0.12 * clamp(blendStrength, 0, 1);
   const frontAt = (s: number) => {
-    const soft = filletSoft * Math.exp(-Math.pow((s - cowlS) / 0.055, 2)) + 1e-4;
+    // Compact fillet window: exactly zero well before the header and the nose, so the
+    // soft-max adds no bias where the roof / nose curves take over (no value step there).
+    const reach = Math.max(1e-3, Math.min(0.12, 0.9 * (roofFrontS - cowlS), 0.9 * cowlS));
+    const window = 1 - smoothstep(0.55 * reach, reach, Math.abs(s - cowlS));
+    const soft = (filletSoft * Math.exp(-Math.pow((s - cowlS) / 0.055, 2)) + 1e-4) * window;
     const flow = smoothMax(flowHood(s), flowScreen(s), soft);
     return mix(legacyFront(s), flow, clamp(blendStrength, 0, 1));
   };
@@ -981,15 +1089,26 @@ export function getVehicleFrame(config: VehicleConfig): VehicleFrame {
   const glassEndSlope = rearSlope * (hatchback ? glassEndRatio : 0.75);
   // Lower tailgate arc: centre (cx, cy), radius R, starts tangent to the glass.
   const arcX0 = xAt(rearGlassS);
-  const arcCx = arcX0 - hatchArcR * Math.cos(glassEndAngle);
-  const arcCy = rearGlassY - hatchArcR * Math.sin(glassEndAngle);
+  // Fastback: re-derive the arc from the parabola's real end slope (exact tangency even if
+  // the roof peak was clamped).
+  const fastEndSlope = spoiler
+    ? (-1.25 * spoilerGlassChord) / Lb
+    : (2 * (H - rearGlassY)) / Math.max(1e-4, (rearGlassS - roofPeakS) * Lb);
+  const arcAngle = fastback ? Math.atan(1 / Math.max(1e-6, fastEndSlope)) : glassEndAngle;
+  const arcR = fastback ? hatchBand / Math.max(1e-6, Math.sin(arcAngle) - Math.sin(arcAngle * 0.3)) : hatchArcR;
+  const arcCx = arcX0 - arcR * Math.cos(arcAngle);
+  const arcCy = rearGlassY - arcR * Math.sin(arcAngle);
   const tailgateArc = (s: number) => {
-    const dx = clamp(xAt(s) - arcCx, -hatchArcR, hatchArcR);
-    return arcCy + Math.sqrt(Math.max(0, hatchArcR * hatchArcR - dx * dx));
+    const dx = clamp(xAt(s) - arcCx, -arcR, arcR);
+    return arcCy + Math.sqrt(Math.max(0, arcR * arcR - dx * dx));
   };
   const sedanDeck = monotone([[rearGlassS, rearGlassY], [tailDeckS, tailDeckY], [1, tailTopY]]);
   const baseTopAt = (s: number) => {
     if (s < roofFrontS) return frontAt(s);
+    if (fastback && s >= roofPeakS) {
+      if (s <= rearGlassS) return fastbackDescent(s);
+      return arcR > 1e-4 ? tailgateArc(s) : rearGlassY;
+    }
     if (s <= roofRearS) return roofAt(s);
     if (s <= rearGlassS) {
       return hermiteSegment(s, roofRearS, rearGlassS, rearRoofY, rearGlassY, glassStartSlope, glassEndSlope);
@@ -1005,7 +1124,8 @@ export function getVehicleFrame(config: VehicleConfig): VehicleFrame {
   // from the rear axle so it does not depend on the glass layout derived from beltAt.
   const kickX = L / 2 - config.rearAxleFromTail / 1000 - (archR + clamp(config.archLipWidth / 1000, 0.025, 0.14)) + 0.02;
   const beltAt = (s: number) => beltLinear(s)
-    + (style.beltKick ?? 0) * smoothstep(sAtX(kickX), sAtX(kickX + 0.45), s);
+    + (style.beltKick ?? 0) * smoothstep(sAtX(kickX), sAtX(kickX + 0.45), s)
+    + (style.beltArc ?? 0) * Math.pow(clamp((s - 0.25) / 0.75, 0, 1), 2);
 
   const archSegments = config.cageDensity === "compact" ? 4 : config.cageDensity === "detailed" ? 8 : 6;
   // The opening stays circular; the outer support lip has a tunable shoulder.
@@ -1071,8 +1191,8 @@ export function getVehicleFrame(config: VehicleConfig): VehicleFrame {
   // station gap made the rail jump outward and back (twisted A-pillar root), most visibly on
   // cab-forward MPVs whose windshield base coincides with the start of the side glass.
   const pillarAt = (s: number) => {
-    const pillarLead = Math.min(0.42 / Lb, Math.max(0.02, start - hoodFrontS - 0.02));
-    const front = smoothstep(start - pillarLead, start, s);
+    const pillarLead = Math.min(0.42 / Lb, Math.max(0.02, cowlS - hoodFrontS - 0.02));
+    const front = smoothstep(cowlS - pillarLead, cowlS, s);
     if (hatchback) return front;
     return front * (1 - smoothstep(end, Math.max(end + 0.04, rearGlassS + 0.035), s));
   };
@@ -1221,9 +1341,9 @@ export function getVehicleFrame(config: VehicleConfig): VehicleFrame {
   // Side view: the mohawk line follows the roof, but the windshield-header and
   // backlight-header corners are rounded with a large radius (variable-width Gaussian),
   // so A-pillar -> roof rail -> C/D-pillar is one continuous arc instead of a polyline.
-  const cornerSigma = (s: number) => 0.032 * Math.max(
+  const cornerSigma = (s: number) => (style.straightScreen ? 0.024 : 0.032) * Math.max(
     Math.exp(-Math.pow((s - roofFrontS) / 0.07, 2)),
-    Math.exp(-Math.pow((s - roofRearS) / 0.07, 2)),
+    (spoiler ? 0.2 : 1) * Math.exp(-Math.pow((s - roofRearS) / 0.07, 2)),
   );
   const RAIL_SAMPLES = 320;
   let railTable: Float64Array | null = null;
@@ -1275,16 +1395,25 @@ export function getVehicleFrame(config: VehicleConfig): VehicleFrame {
   // puts the pillar base on the shoulder line and kinks it). It sweeps on one smooth curve
   // from the bonnet shut line (lead-in start) to its roof-front position.
   const aPillarZ = (s: number, zTumble: number) => {
-    if (s >= roofFrontS) return zTumble;
-    const lead = Math.min(0.42 / Lb, Math.max(0.02, start - hoodFrontS - 0.02));
-    const s0 = start - lead;
+    if (s >= cowlS) return zTumble;
+    const lead = Math.min(0.42 / Lb, Math.max(0.02, cowlS - hoodFrontS - 0.02));
+    const s0 = cowlS - lead;
     if (s <= s0) return zTumble;
     const zH = hoodW * halfWidthAt(s0);
-    const zR = railPoint(roofFrontS).z9;
-    const t = clamp((s - s0) / Math.max(1e-3, roofFrontS - s0), 0, 1);
-    // C1 ease that leaves the hood edge with the hood's own (zero) lateral slope
-    return zH + (zR - zH) * (1 - (1 - t) * (1 - t));
+    const zC = railPoint(cowlS).z9;
+    const t = clamp((s - s0) / Math.max(1e-3, cowlS - s0), 0, 1);
+    // smoothstep ease: leaves the bonnet edge and arrives at the pillar base tangentially
+    return zH + (zC - zH) * t * t * (3 - 2 * t);
   };
+  // Fastback with spoiler: quarter window = trapezoid. Its top stays level with the side
+  // glass top; its rear edge runs parallel to the rear-window side edge, offset forward so
+  // the D-pillar has a constant perpendicular width (dPillarWidth).
+  const dPillarWidth = 0.16;
+  const dShift = dPillarWidth / Math.max(0.3, Math.cos(hatchRake));
+  const dLineX0 = xAt(spoilerG0) - dShift;
+  const dLineX1 = xAt(rearGlassS) - dShift;
+  const dLine = (x: number) => spoilerGlassTop - 0.008
+    - ((x - dLineX0) / Math.max(1e-3, dLineX1 - dLineX0)) * (spoilerGlassTop - 0.008 - rearGlassY);
   const dloAt = (s: number): DloStation => {
     const railRawPoint = railPoint(s);
     const { sill, y9 } = railRawPoint;
@@ -1304,19 +1433,40 @@ export function getVehicleFrame(config: VehicleConfig): VehicleFrame {
     const sinPhi = Math.sqrt(Math.max(0, 1 - along * along));
     const rearGrowth = hatchback ? 1 : 1 + 0.15 * smoothstep(roofRearS, rearGlassS, s);
     const section = (pillarWidth * rearGrowth) / Math.max(0.55, sinPhi);
-    const y8 = y9 - Math.min(section * tumbleCos, Math.max(0.012, (y9 - sill.y) * 0.5));
-    const z8 = Math.max(sill.z - (y8 - sill.y) * tumbleTan, z9 + 0.004);
+    let y8 = y9 - Math.min(section * tumbleCos, Math.max(0.012, (y9 - sill.y) * 0.62));
+    if (spoiler) {
+      const x = xAt(s);
+      const levelTop = Math.min(y8, spoilerGlassTop - 0.008);
+      const pillarEdge = dLine(x);
+      // soft minimum: rounded window corner where the level top meets the slanted edge
+      const k = 0.03;
+      let edge = (levelTop + pillarEdge - Math.sqrt((levelTop - pillarEdge) * (levelTop - pillarEdge) + k * k)) / 2;
+      // behind the window, row 8 eases back up along the (flat) pillar surface
+      const behind = smoothstep(dLineX1, dLineX1 + 0.25, x);
+      edge = mix(Math.max(edge, sill.y + 0.012), y8, behind);
+      y8 = Math.min(y8, edge);
+    }
+    const z8Plane = sill.z - (y8 - sill.y) * tumbleTan;
+    const z8 = Math.max(z8Plane, z9 + 0.004);
     const top = sill.top;
     const roofInset = Math.min(0.075, Math.max(0.03, z9 * 0.11));
+    // Mohawk line on the corner: the rail (row 9 = edge of windshield / roof / backlight)
+    // moves a little inboard and up onto the top surface, so the rail band 8 -> 9 wraps round
+    // the corner (part side, part top) instead of lying flat in the side-glass plane. The
+    // rise follows the existing roof-rail rounding slope, so row 9 lands on the top surface.
+    const cornerSlope = clamp((0.58 * Math.max(0, top - y9)) / roofInset, 0, 1.2);
+    const wrapIn = Math.min(0.028, Math.max(0, z9 - 0.25) * 0.1);
+    const z9w = z9 - wrapIn;
+    const y9w = Math.min(top - 0.002, y9 + wrapIn * cornerSlope * 0.9);
     return {
       y7: sill.y,
       z7: sill.z,
       y8,
       z8,
-      y9,
-      z9,
-      y10: Math.max(y9 + 0.006, top - (top - y9) * 0.42),
-      z10: z9 - roofInset,
+      y9: y9w,
+      z9: z9w,
+      y10: Math.max(y9w + 0.006, top - (top - y9w) * 0.42),
+      z10: z9w - Math.max(0.022, roofInset - wrapIn * 0.5),
     };
   };
 
@@ -1339,11 +1489,15 @@ export function getVehicleFrame(config: VehicleConfig): VehicleFrame {
       break;
     }
   }
-  const end = style.cPillar !== null
+  // Fastbacks: the side glass runs on under the falling roof (bounded by the minimum
+  // greenhouse height), so the DLO tapers into the C-pillar instead of stopping short.
+  const endRaw = style.cPillar !== null
     ? Math.min(endLimit, roofRearS + style.cPillar * (rearGlassS - roofRearS))
-    : Math.min(endLimit - 0.015, style.dPillar
-      ? Math.max(start + 0.2, roofRearS - style.dPillar / Lb)
-      : roofRearS + (rearGlassS - roofRearS) * 0.32);
+    : Math.min(endLimit - 0.015, fastback
+      ? roofRearS + 0.3 * (rearGlassS - roofRearS)
+      : style.dPillar
+        ? Math.max(start + 0.2, roofRearS - style.dPillar / Lb)
+        : roofRearS + (rearGlassS - roofRearS) * 0.32);
   // Two-row door layouts are anchored to the wheels, not to the length of the side glass
   // (which grows with the backlight angle): SUV rear doors end just behind the rear axle
   // and wrap the arch; MPV sliding doors end ahead of the rear arch. doorSplitPercent
@@ -1353,12 +1507,21 @@ export function getVehicleFrame(config: VehicleConfig): VehicleFrame {
     ? (() => {
       const frontDoorEdge = Math.max(arches[0].x + arches[0].lipR + 0.02, xAt(start) - 0.03);
       // SUV rear door: ends ~120 mm behind the axle and wraps the arch (real SUV layout).
-      const rearDoorEdge = config.type === "mpv" ? arches[1].x - arches[1].lipR - 0.03 : arches[1].x + 0.12;
-      const cS = clamp(sAtX(rearDoorEdge), start + 0.12, end - 3 * pillarHalfS);
+      const rearDoorEdge = config.type === "mpv" ? arches[1].x - arches[1].lipR - 0.03 : arches[1].x + (style.cFromAxle ?? 0.12);
+      const cS = clamp(sAtX(rearDoorEdge), start + 0.12, spoiler ? sAtX(dLineX0) - 0.04 : endRaw - 3 * pillarHalfS);
       const split = clamp(config.doorSplitPercent / 100, 0.3, 0.7);
-      return [sAtX(mix(frontDoorEdge, xAt(cS), split)), cS];
+      const bS = sAtX(mix(frontDoorEdge, xAt(cS), split));
+      // Rear door glass ends at the C-pillar; behind it a quarter window (also on fastbacks).
+      return [bS, cS];
     })()
-    : [mix(start, end, clamp(config.doorSplitPercent / 100, 0.24, 0.72))];
+    : [mix(start, endRaw, clamp(config.doorSplitPercent / 100, 0.24, 0.72))];
+  // Fastback SUV: a compact quarter window (~0.3 m) behind the C-pillar; its top edge runs
+  // down with the roof, parallel to the D-pillar, instead of a long window into the tail.
+  const end = spoiler
+    ? clamp(sAtX(dLineX1 - 0.015), start + 0.2, rearGlassS - 0.01)
+    : fastback && style.pillars.length > 1
+      ? Math.min(endRaw, sAtX(arches[1].x + (style.cFromAxle ?? 0.12) + 0.4))
+      : endRaw;
 
   const hw0 = halfWidthAt(0);
   const noseSpan = nose - floor;
@@ -1393,6 +1556,47 @@ export function getVehicleFrame(config: VehicleConfig): VehicleFrame {
       openBottom: true,
     }
     : null;
+
+  // Glass alignment: windshield top and rear-window top level with the highest point of the
+  // side glass (+8 mm SubD compensation); found on the centre-line profile.
+  let sideTopMax = -Infinity;
+  for (let i = 0; i <= 48; i += 1) sideTopMax = Math.max(sideTopMax, dloAt(mix(start, end, i / 48)).y8);
+  const glassTopY = sideTopMax + 0.008;
+  let windshieldTopS = roofFrontS;
+  for (let sScan = cowlS + 0.04; sScan < roofFrontS; sScan += 0.0005) {
+    if (topAt(sScan) >= glassTopY) {
+      windshieldTopS = sScan;
+      break;
+    }
+  }
+  let rearGlassTopS = rearGlassTopFallback;
+  // Upright backlights lose more height to the SubD limit along their side edges.
+  const rearTopY = glassTopY + (hatchback && !fastback ? 0.02 : 0);
+  for (let sScan = roofRearS; sScan < rearGlassS - 0.002; sScan += 0.0002) {
+    if (topAt(sScan) <= rearTopY) {
+      rearGlassTopS = Math.max(sScan, roofRearS + 0.0012);
+      break;
+    }
+  }
+
+  // Glass edges bowed in plan view, parallel to the nose / tail: inside the windshield and
+  // rear-window bands the centre is displaced towards that end (up to bowFront / bowRear),
+  // easing in and out over 0.25 m so section spacing never folds. Rail rows stay put.
+  const bowFront = 0.07;
+  const bowRear = hatchback ? 0.04 : 0.05;
+  const easeS = 0.25 / Lb;
+  const band = (s: number, a: number, b: number) =>
+    smoothstep(a - easeS, a, s) * (1 - smoothstep(b, b + easeS, s));
+  const glassBowX = (s: number, z: number) => {
+    const wF = band(s, cowlS, windshieldTopS);
+    const wR = band(s, rearGlassTopS, rearGlassS) * (1 - smoothstep(0.975, 0.995, s));
+    if (wF < 1e-4 && wR < 1e-4) return 0;
+    const sRef = clamp(s, cowlS, rearGlassS);
+    const zRail = Math.max(0.2, dloAt(sRef).z9);
+    const zn = clamp(Math.abs(z) / zRail, 0, 1);
+    const shape = 1 - zn * zn;
+    return (-bowFront * wF + bowRear * wR) * shape;
+  };
 
   return {
     type: config.type,
@@ -1430,12 +1634,15 @@ export function getVehicleFrame(config: VehicleConfig): VehicleFrame {
     roofRearS,
     rearGlassS,
     rearGlassTopS,
+    windshieldTopS,
+    spoilerTipS: spoiler ? spoilerTip : -1,
     tailS0,
     tailFillet,
     shoulderAt,
     pillarAt,
     dloAt,
     archWarp,
+    glassBowX,
     fenderPeakAt,
     tailDeckS,
     hatchback,
@@ -1476,6 +1683,13 @@ function makeStations(frame: VehicleFrame, density: CageDensity) {
   }
   push(frame.hoodEndS, 7);
   push(frame.roofFrontS, 8);
+  push(frame.windshieldTopS, 10);
+  if (frame.spoilerTipS > 0) {
+    push(frame.spoilerTipS, 10, false, false, true);
+    // quarter-window top-rear corner and two stations down its slanted rear edge
+    const corner = frame.rearGlassTopS - (frame.rearGlassS - frame.glass.end);
+    for (const t of [0, 0.34, 0.67]) push(mix(corner, frame.glass.end, t), 7);
+  }
   push((frame.roofFrontS + frame.roofRearS) / 2, 4);
   push(frame.roofRearS, 8);
   // Backlight landmarks may sit close together in x on upright tailgates (they are far
@@ -1489,7 +1703,9 @@ function makeStations(frame: VehicleFrame, density: CageDensity) {
     const span = frame.rearGlassS - frame.rearGlassTopS;
     const arc = Math.hypot(span * frame.Lb, frame.topAt(frame.rearGlassTopS) - frame.topAt(frame.rearGlassS));
     const target = density === "compact" ? 0.19 : density === "detailed" ? 0.1 : 0.13;
-    const count = clamp(Math.ceil(arc / target), 2, Math.max(2, Math.floor(span / 0.0045)));
+    // Cap by true arc length (>= 50 mm per row), not by body-length s: upright backlights
+    // are short in x but tall, and need several rows to keep a rounded-rectangle opening.
+    const count = clamp(Math.ceil(arc / target), 2, Math.max(2, Math.floor(arc / 0.05)));
     for (let step = 1; step < count; step += 1) push(frame.rearGlassTopS + (span * step) / count, 9, false, false, true);
   }
   // Quarter-ellipse tail fillet: equal angle steps, so rings bunch up towards the end face.
@@ -1511,8 +1727,12 @@ function makeStations(frame: VehicleFrame, density: CageDensity) {
   const kept: typeof entries = [];
   for (const entry of entries) {
     const last = kept[kept.length - 1];
-    const minimum = last && last.glass && entry.glass ? 0.004
-      : last && (last.glass || entry.glass) ? 0.0065
+    // Glass stations merge by true distance along the profile (x and height), so rows on an
+    // upright backlight are not collapsed just because they are close in x.
+    const profileGap = last ? Math.hypot((entry.s - last.s) * frame.Lb, frame.topAt(entry.s) - frame.topAt(last.s)) : Infinity;
+    const glassPair = last && last.glass && entry.glass;
+    const minimum = last && (last.glass || entry.glass)
+      ? (glassPair ? (profileGap < 0.035 ? Infinity : 0) : ((entry.s - last.s) * frame.Lb < 0.012 || profileGap < 0.045 ? Infinity : 0))
       : last && last.tail && entry.tail ? 0.002 : last && last.arch && entry.arch ? 0.005 : 0.008;
     if (last && entry.s - last.s < minimum) {
       if (entry.priority > last.priority) kept[kept.length - 1] = entry;
@@ -1617,7 +1837,7 @@ function sectionHalf(frame: VehicleFrame, config: VehicleConfig, s: number): Arr
   // Shoulder line: ahead of the side glass the fender shoulder (rows 6-7) must not ride up
   // with a steep one-motion bonnet; it continues horizontally under the A-pillar foot and
   // the bonnet rises inboard of it (soft minimum, so no crease where the cap engages).
-  const softMin = (a: number, b: number, k = 0.02) => (a + b - Math.sqrt((a - b) * (a - b) + k * k)) / 2;
+  const softMin = (a: number, b: number, k = 0.06) => (a + b - Math.sqrt((a - b) * (a - b) + k * k)) / 2;
   const shoulderCabinY = Math.min(belt - 0.012, y8c - 0.026);
   deck[0][1] = softMin(deck[0][1], shoulderCabinY + 0.03);
   deck[1][1] = softMin(deck[1][1], dlo.y7 + 0.03);
@@ -1632,7 +1852,8 @@ function sectionHalf(frame: VehicleFrame, config: VehicleConfig, s: number): Arr
   // Rail (row 9) and roof-side (row 10) share one blend behind the roof, otherwise they
   // descend at different rates along the C-pillar and the backlight edge twists.
   const gPillar = frame.pillarAt(s);
-  const blendOf = (index: number) => (index <= 1 ? gSide
+  const gFoot = Math.max(gSide * 0.35, gPillar);
+  const blendOf = (index: number) => (index <= 1 ? (s < frame.cowlS + 0.2 ? gFoot : gSide)
     : index <= 3 ? gPillar
       : index === 4 && s > frame.roofRearS ? gSide : g);
   const upper = deck.map(([zd, yd], index) => [
@@ -1922,6 +2143,8 @@ export function buildControlMesh(config: VehicleConfig): ControlMesh {
   }
   sections.forEach((s, index) => {
     const ring = ringFromHalf(halves[index], frame.xAt(s));
+    // curved glass edges (plan view): only the inner roof/glass rows 10-12 move
+    for (const k of [HALF - 1, HALF, HALF + 1]) ring[k][0] += frame.glassBowX(s, ring[k][2]);
     // Lip loop (row 3) fully re-timed, door-middle row (4) half way: concentric arch bands.
     const x = frame.xAt(s);
     const lipX = frame.archWarp(x, 1);
@@ -2119,7 +2342,7 @@ export function buildControlMesh(config: VehicleConfig): ControlMesh {
     const inArch = frame.arches.some((arch) => Math.abs(xm - arch.x) < arch.rc);
     const pillarBand = frame.glass.pillars.some((pillar) => Math.abs(middle - pillar) < frame.glass.pillarHalf * 1.1);
     const isSideGlass = middle > frame.glass.start && middle < frame.glass.end && !pillarBand;
-    const isWindshield = middle > frame.cowlS && middle < frame.roofFrontS;
+    const isWindshield = middle > frame.cowlS && middle < frame.windshieldTopS;
     const isRearGlass = middle > frame.rearGlassTopS && middle < frame.rearGlassS;
     for (let r = 0; r < N; r += 1) {
       const face = quad(i * N, (i + 1) * N, r);
@@ -2168,7 +2391,7 @@ export function buildControlMesh(config: VehicleConfig): ControlMesh {
   }
 
   // Creases
-  const edgeCounts = new Map<string, { a: number; b: number; count: number }>();
+  const edgeCounts = new Map<number, { a: number; b: number; count: number }>();
   faces.forEach((face) => face.forEach((a, index) => {
     const b = face[(index + 1) % face.length];
     const key = edgeKey(a, b);
@@ -2177,7 +2400,7 @@ export function buildControlMesh(config: VehicleConfig): ControlMesh {
     edgeCounts.set(key, current);
   }));
   const edgeSet = new Set(edgeCounts.keys());
-  const glassEdges = new Set<string>();
+  const glassEdges = new Set<number>();
   [...sideGlass, ...windshield, ...rearGlass].forEach((face) => face.forEach((a, index) => {
     glassEdges.add(edgeKey(a, face[(index + 1) % face.length]));
   }));
@@ -2250,11 +2473,16 @@ export function buildControlMesh(config: VehicleConfig): ControlMesh {
   };
 }
 
-function buildCreases(frame: VehicleFrame, config: VehicleConfig, sections: number[], edgeSet: Set<string>) {
+function buildCreases(frame: VehicleFrame, config: VehicleConfig, sections: number[], edgeSet: Set<number>) {
   const N = RING_COUNT;
   const hard = clamp(config.surfaceHardness / 100, 0, 1);
-  const map = new Map<string, Crease>();
-  const addCrease = (a: number, b: number, weight: number, feature: string) => {
+  const map = new Map<number, Crease>();
+  // Softer styles scale body feature lines only; glass / wheel-opening edges stay crisp.
+  const softFeatures = new Set(["hood-front-edge", "front-corner", "hood-edge", "hood-character-line",
+    "feature-line", "fender-edge", "shoulder", "cowl-line", "lower-body-line", "rocker-line"]);
+  const creaseScale = frame.style.creaseScale ?? 1;
+  const addCrease = (a: number, b: number, rawWeight: number, feature: string) => {
+    const weight = softFeatures.has(feature) ? rawWeight * creaseScale : rawWeight;
     const key = edgeKey(a, b);
     if (!edgeSet.has(key) || weight <= 0.05) return;
     const existing = map.get(key);
@@ -2312,6 +2540,15 @@ function buildCreases(frame: VehicleFrame, config: VehicleConfig, sections: numb
   });
   for (const k of [6, 7, 8, 9, 10]) across(hoodFrontIndex, k, 0.7 + 1.1 * hard, "hood-front-edge");
 
+  // Integrated spoiler: crisp lip across the roof (rail to centre) at the tip station.
+  if (frame.spoilerTipS > 0) {
+    let tipIndex = 0;
+    sections.forEach((s, index) => {
+      if (Math.abs(s - frame.spoilerTipS) < Math.abs(sections[tipIndex] - frame.spoilerTipS)) tipIndex = index;
+    });
+    for (const k of [8, 9, 10]) across(tipIndex, k, 1.3 + 0.6 * hard, "spoiler-edge");
+  }
+
   // No crease on the rear ring: the tail is rounded by geometry, not by a fold line.
   for (let r = 0; r < N; r += 1) {
     addCrease(r, (r + 1) % N, 0.35 + 0.5 * hard, "front-corner");
@@ -2326,7 +2563,7 @@ function buildCreases(frame: VehicleFrame, config: VehicleConfig, sections: numb
 interface SubdData {
   vertices: Point3[];
   faces: number[][];
-  creases: Map<string, number>;
+  creases: Map<number, number>;
 }
 
 interface SubdEdge {
@@ -2339,7 +2576,7 @@ interface SubdEdge {
 function subdivideOnce(mesh: SubdData): SubdData {
   const { vertices, faces } = mesh;
   const facePoints = faces.map((face) => average(face.map((index) => vertices[index])));
-  const edges = new Map<string, SubdEdge>();
+  const edges = new Map<number, SubdEdge>();
   const vertexFaces: number[][] = vertices.map(() => []);
 
   faces.forEach((face, faceIndex) => {
@@ -2403,8 +2640,8 @@ function subdivideOnce(mesh: SubdData): SubdData {
     refined.push(smooth);
   });
 
-  const edgeIndex = new Map<string, number>();
-  const nextCreases = new Map<string, number>();
+  const edgeIndex = new Map<number, number>();
+  const nextCreases = new Map<number, number>();
   edges.forEach((edge, key) => {
     const mid = average([vertices[edge.a], vertices[edge.b]]);
     let point = mid;
@@ -2476,7 +2713,7 @@ export function subdivide(vertices: Point3[], faces: number[][], creases: Crease
 function correctWheelBoundaries(surface: PatchMesh, controlMesh: ControlMesh, glazingPoints?: Set<Point3>): PatchMesh {
   // The Catmull-Clark limit shrinks circular boundary polygons. Reproject only
   // the opening boundary, keeping every wheel-to-arch gap truly constant.
-  const edgeCounts = new Map<string, { a: number; b: number; count: number }>();
+  const edgeCounts = new Map<number, { a: number; b: number; count: number }>();
   surface.faces.forEach((face) => face.forEach((a, index) => {
     const b = face[(index + 1) % face.length];
     const key = edgeKey(a, b);
@@ -2557,7 +2794,7 @@ export function evaluateBody(controlMesh: ControlMesh, levels = 2): PatchMesh {
 export function evaluatePatch(vertices: Point3[], faces: number[][], levels = 2): PatchMesh {
   if (faces.length === 0) return { vertices: [], faces: [] };
   const compact = compactPatch(vertices, faces);
-  const edges = new Map<string, { a: number; b: number; count: number }>();
+  const edges = new Map<number, { a: number; b: number; count: number }>();
   compact.faces.forEach((face) => face.forEach((a, index) => {
     const b = face[(index + 1) % face.length];
     const key = edgeKey(a, b);
@@ -2575,6 +2812,40 @@ export function evaluatePatch(vertices: Point3[], faces: number[][], levels = 2)
 /* Geometry conversion                                                 */
 /* ------------------------------------------------------------------ */
 
+/** Area-weighted (Newell) vertex normals as a flat Float32Array, allocation-free per face. */
+function patchNormalArray(mesh: PatchMesh) {
+  const { vertices, faces } = mesh;
+  const out = new Float32Array(vertices.length * 3);
+  for (let f = 0; f < faces.length; f += 1) {
+    const face = faces[f];
+    let nx = 0;
+    let ny = 0;
+    let nz = 0;
+    for (let i = 0; i < face.length; i += 1) {
+      const c = vertices[face[i]];
+      const n = vertices[face[(i + 1) % face.length]];
+      nx += (c[1] - n[1]) * (c[2] + n[2]);
+      ny += (c[2] - n[2]) * (c[0] + n[0]);
+      nz += (c[0] - n[0]) * (c[1] + n[1]);
+    }
+    for (let i = 0; i < face.length; i += 1) {
+      const o = face[i] * 3;
+      out[o] += nx;
+      out[o + 1] += ny;
+      out[o + 2] += nz;
+    }
+  }
+  for (let o = 0; o < out.length; o += 3) {
+    const l = Math.hypot(out[o], out[o + 1], out[o + 2]);
+    if (l > 0) {
+      out[o] /= l;
+      out[o + 1] /= l;
+      out[o + 2] /= l;
+    }
+  }
+  return out;
+}
+
 export function computePatchNormals(mesh: PatchMesh) {
   const normals = mesh.vertices.map(() => new THREE.Vector3());
   mesh.faces.forEach((face) => {
@@ -2587,41 +2858,46 @@ export function computePatchNormals(mesh: PatchMesh) {
 
 /** Adds an inward return flange on every open boundary (glass, wheel and grille openings). */
 export function addBoundaryFlange(mesh: PatchMesh, depth: number, includeBody = true): PatchMesh {
-  const normals = computePatchNormals(mesh);
-  const counts = new Map<string, number>();
-  mesh.faces.forEach((face) =>
-    face.forEach((v, k) => {
-      const key = edgeKey(v, face[(k + 1) % face.length]);
+  const normals = patchNormalArray(mesh);
+  const counts = new Map<number, number>();
+  for (const face of mesh.faces) {
+    for (let k = 0; k < face.length; k += 1) {
+      const key = edgeKey(face[k], face[(k + 1) % face.length]);
       counts.set(key, (counts.get(key) ?? 0) + 1);
-    }),
-  );
+    }
+  }
   const vertices = [...mesh.vertices];
   const faces = includeBody ? [...mesh.faces] : [];
   const outer = new Map<number, number>();
   const inner = new Map<number, number>();
   const outerOf = (v: number) => {
-    if (!outer.has(v)) {
-      outer.set(v, vertices.length);
+    let index = outer.get(v);
+    if (index === undefined) {
+      index = vertices.length;
+      outer.set(v, index);
       vertices.push([...mesh.vertices[v]] as Point3);
     }
-    return outer.get(v)!;
+    return index;
   };
   const innerOf = (v: number) => {
-    if (!inner.has(v)) {
+    let index = inner.get(v);
+    if (index === undefined) {
       const p = mesh.vertices[v];
-      const n = normals[v];
-      inner.set(v, vertices.length);
-      vertices.push([p[0] - n.x * depth, p[1] - n.y * depth, p[2] - n.z * depth]);
+      const o = v * 3;
+      index = vertices.length;
+      inner.set(v, index);
+      vertices.push([p[0] - normals[o] * depth, p[1] - normals[o + 1] * depth, p[2] - normals[o + 2] * depth]);
     }
-    return inner.get(v)!;
+    return index;
   };
-  mesh.faces.forEach((face) =>
-    face.forEach((a, k) => {
+  for (const face of mesh.faces) {
+    for (let k = 0; k < face.length; k += 1) {
+      const a = face[k];
       const b = face[(k + 1) % face.length];
-      if (counts.get(edgeKey(a, b)) !== 1) return;
+      if (counts.get(edgeKey(a, b)) !== 1) continue;
       faces.push([outerOf(b), outerOf(a), innerOf(a), innerOf(b)]);
-    }),
-  );
+    }
+  }
   return includeBody ? { vertices, faces } : compactPatch(vertices, faces);
 }
 
@@ -2638,15 +2914,29 @@ export function offsetPatch(mesh: PatchMesh, distance: number): PatchMesh {
 }
 
 export function patchToGeometry(mesh: PatchMesh) {
-  const normals = computePatchNormals(mesh);
+  const { vertices, faces } = mesh;
+  const positions = new Float32Array(vertices.length * 3);
+  for (let i = 0; i < vertices.length; i += 1) {
+    const v = vertices[i];
+    positions[i * 3] = v[0];
+    positions[i * 3 + 1] = v[1];
+    positions[i * 3 + 2] = v[2];
+  }
+  let triangleCount = 0;
+  for (const face of faces) triangleCount += Math.max(0, face.length - 2);
+  const indices = vertices.length > 65535 ? new Uint32Array(triangleCount * 3) : new Uint16Array(triangleCount * 3);
+  let k = 0;
+  for (const face of faces) {
+    for (let i = 1; i < face.length - 1; i += 1) {
+      indices[k++] = face[0];
+      indices[k++] = face[i];
+      indices[k++] = face[i + 1];
+    }
+  }
   const geometry = new THREE.BufferGeometry();
-  geometry.setAttribute("position", new THREE.Float32BufferAttribute(mesh.vertices.flat(), 3));
-  geometry.setAttribute("normal", new THREE.Float32BufferAttribute(normals.flatMap((n) => [n.x, n.y, n.z]), 3));
-  const indices: number[] = [];
-  mesh.faces.forEach((face) => {
-    for (let i = 1; i < face.length - 1; i += 1) indices.push(face[0], face[i], face[i + 1]);
-  });
-  geometry.setIndex(indices);
+  geometry.setAttribute("position", new THREE.BufferAttribute(positions, 3));
+  geometry.setAttribute("normal", new THREE.BufferAttribute(patchNormalArray(mesh), 3));
+  geometry.setIndex(new THREE.BufferAttribute(indices, 1));
   geometry.computeBoundingSphere();
   return geometry;
 }
@@ -2654,7 +2944,7 @@ export function patchToGeometry(mesh: PatchMesh) {
 /** Quad edge lines only (no triangle diagonals) – used for wireframe & cage displays. */
 export function patchEdgesGeometry(vertices: Point3[], faces: number[][]) {
   const positions: number[] = [];
-  const seen = new Set<string>();
+  const seen = new Set<number>();
   faces.forEach((face) =>
     face.forEach((v, k) => {
       const next = face[(k + 1) % face.length];

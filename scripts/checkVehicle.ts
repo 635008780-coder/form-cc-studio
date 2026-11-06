@@ -4,6 +4,7 @@ import { conceptTemplates, createTemplateConfig } from "../src/conceptLibrary";
 import { analyzeControlMesh } from "../src/topologyCheck";
 import { buildVehicleDetails } from "../src/vehicleDetails";
 import { createQuadSurfaceObj } from "../src/quadExport";
+import { buildVehicleAssets } from "../src/vehicleAssets";
 import { buildControlMesh, computePatchNormals, evaluateBody, evaluateVehicleSurfaces, getMinimumBodyHeight, getTireSpecification, getVehicleFrame, getWheelHousingLimits, getWheelPositions, patchToGeometry, RING_COUNT, type PatchMesh, type VehicleConfig } from "../src/vehicleModel";
 
 function pointKey(point: number[]) {
@@ -74,7 +75,8 @@ function checkMesh(label: string, config: VehicleConfig) {
   const rearNormals = computePatchNormals(materials.rearGlass);
   const rearNormalX = rearNormals.reduce((sum, normal) => sum + normal.x, 0) / rearNormals.length;
   // Mid-engine fastbacks carry a flatter rear window than three-box sedans.
-  const rearGlassMin = config.type === "sedan" ? 0.3 : 0.5;
+  // Fastback roofs (coupe-SUV / fastback hatch) carry a sedan-like raked backlight.
+  const rearGlassMin = config.type === "sedan" || getVehicleFrame(config).style.fastback ? 0.3 : 0.5;
   assert.ok(rearNormalX > rearGlassMin, `${label}: rear glass points toward sky (${rearNormalX.toFixed(2)})`);
   const roofHeight = getVehicleFrame(config).H;
   assert.ok(materials.rearGlass.vertices.every((point) => point[1] < roofHeight + 0.001), `${label}: backlight rises above roof`);
@@ -331,3 +333,94 @@ for (const template of conceptTemplates) {
 }
 console.log(`Stress cases passed: ${stress}`);
 console.log("Parametric deformation checks passed.");
+// Render-path regression: every asset the viewport consumes must be valid in both the
+// interactive draft and the full-quality build (a missing attribute here blanks the canvas).
+{
+  let assetCases = 0;
+  const checkGeometry = (label: string, geometry: THREE.BufferGeometry) => {
+    const position = geometry.getAttribute("position");
+    assert.ok(position, `${label}: geometry without position attribute`);
+    const array = position.array as ArrayLike<number>;
+    for (let i = 0; i < array.length; i += 1) assert.ok(Number.isFinite(array[i]), `${label}: non-finite position`);
+  };
+  for (const template of conceptTemplates) {
+    const origin = createTemplateConfig(template);
+    const variants: Array<Partial<VehicleConfig>> = [
+      {},
+      { hasGrille: true, hasLowerGrille: true, grillePattern: "honeycomb" },
+      { hasGrille: true, hasLowerGrille: false, grillePattern: "horizontal" },
+      { hasGrille: false, hasLowerGrille: true },
+    ];
+    for (const patch of variants) {
+      for (const draft of [true, false]) {
+        const config = { ...origin, ...patch } as VehicleConfig;
+        const label = `${template.id}/${JSON.stringify(patch)}/${draft ? "draft" : "full"}`;
+        const assets = buildVehicleAssets(config, buildControlMesh(config), draft);
+        Object.entries(assets).forEach(([key, value]) => {
+          if (value instanceof THREE.BufferGeometry) checkGeometry(`${label}/${key}`, value);
+        });
+        Object.entries(assets.details).forEach(([key, value]) => {
+          if (value instanceof THREE.BufferGeometry) checkGeometry(`${label}/details.${key}`, value);
+        });
+        if (assets.grilleBezel) new THREE.TubeGeometry(assets.grilleBezel, 160, 0.014, 8, true).dispose();
+        assets.archCurves.forEach((curve) => new THREE.TubeGeometry(curve, 48, 0.02, 8, false).dispose());
+        assets.details.dispose();
+        assetCases += 1;
+      }
+    }
+  }
+  console.log(`Render asset cases passed: ${assetCases}`);
+}
+
+// Glass alignment: windshield and rear window tops/bottoms level with the side glass.
+{
+  const glassRange = (patch: PatchMesh) => {
+    const ys = patch.vertices.map((v) => v[1]);
+    return [Math.min(...ys), Math.max(...ys)];
+  };
+  for (const template of conceptTemplates) {
+    const config = createTemplateConfig(template);
+    const surfaces = evaluateVehicleSurfaces(buildControlMesh(config), 2);
+    const [sideBottom, sideTop] = glassRange(surfaces.sideGlass);
+    for (const [name, patch] of [["windshield", surfaces.windshield], ["rear glass", surfaces.rearGlass]] as const) {
+      const [bottom, top] = glassRange(patch);
+      assert.ok(Math.abs(top - sideTop) < 0.025, `${template.id}: ${name} top ${((top - sideTop) * 1000).toFixed(0)} mm off the side glass`);
+      assert.ok(Math.abs(bottom - sideBottom) < 0.05, `${template.id}: ${name} bottom ${((bottom - sideBottom) * 1000).toFixed(0)} mm off the side glass`);
+    }
+  }
+  console.log("Glass alignment checks passed.");
+}
+
+// Uniform A-pillar: the 3D width between side-glass edge and windshield edge is constant
+// from the cowl to the roof front (no wedge-shaped pillar), and spoiler on/off both build.
+{
+  for (const template of conceptTemplates) {
+    const config = createTemplateConfig(template);
+    const frame = getVehicleFrame(config);
+    // True (perpendicular) width: distance from each side-glass-edge point to the nearest
+    // point of the windshield-edge curve, so raked pillars cut obliquely are measured right.
+    // visible pillar: from the front corner of the side glass up to the roof
+    const s0 = Math.max(frame.glass.start, frame.cowlS + 0.15 * (frame.roofFrontS - frame.cowlS));
+    const s1 = frame.roofFrontS;
+    const rail: number[][] = [];
+    for (let i = -40; i <= 240; i += 1) {
+      const s = frame.cowlS + ((frame.roofFrontS - frame.cowlS) * i) / 200;
+      const d = frame.dloAt(s);
+      rail.push([frame.xAt(s), d.y9, d.z9]);
+    }
+    const widths: number[] = [];
+    for (let i = 0; i <= 12; i += 1) {
+      const s = s0 + ((s1 - s0) * i) / 12;
+      const d = frame.dloAt(s);
+      const p8 = [frame.xAt(s), d.y8, d.z8];
+      widths.push(Math.min(...rail.map((q) => Math.hypot(q[0] - p8[0], q[1] - p8[1], q[2] - p8[2]))));
+    }
+    const spread = Math.max(...widths) - Math.min(...widths);
+    assert.ok(spread < 0.02, `${template.id}: A-pillar width varies by ${(spread * 1000).toFixed(0)} mm (${widths.map((w) => (w * 1000).toFixed(0)).join(",")})`);
+    for (const hasSpoiler of [true, false]) {
+      const report = analyzeControlMesh(buildControlMesh({ ...config, hasSpoiler }));
+      assert.equal(report.nonManifoldEdges + report.inconsistentEdges + report.collapsedFaces, 0, `${template.id}: spoiler ${hasSpoiler} broke topology`);
+    }
+  }
+  console.log("A-pillar and spoiler checks passed.");
+}

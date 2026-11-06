@@ -17,8 +17,6 @@ export interface VehicleDetails {
   rearLamps: THREE.BufferGeometry;
   darkTrim: THREE.BufferGeometry;
   lowerGrillePanel: THREE.BufferGeometry;
-  blackout: THREE.BufferGeometry;
-  chrome: THREE.BufferGeometry;
   lowerGrilleFrame: THREE.BufferGeometry;
   lowerGrilleBars: THREE.BufferGeometry;
   handles: DetailPlacement[];
@@ -159,7 +157,27 @@ function placement(hit: Hit, side: 1 | -1): DetailPlacement {
 
 type Quad = [[number, number], [number, number], [number, number], [number, number]];
 
-export function buildVehicleDetails(config: VehicleConfig, probeGeometry: THREE.BufferGeometry): VehicleDetails {
+export function buildVehicleDetails(config: VehicleConfig, probeGeometry: THREE.BufferGeometry, draft = false): VehicleDetails {
+  if (draft) {
+    // Interactive preview: identical structure, empty but valid geometries.
+    const empty = () => {
+      const geometry = new THREE.BufferGeometry();
+      geometry.setAttribute("position", new THREE.Float32BufferAttribute([], 3));
+      return geometry;
+    };
+    const geometries = {
+      gaps: empty(), frontLamps: empty(), frontLightElements: empty(), drl: empty(), rearLamps: empty(),
+      darkTrim: empty(), lowerGrillePanel: empty(), lowerGrilleFrame: empty(), lowerGrilleBars: empty(),
+    };
+    return {
+      ...geometries,
+      handles: [],
+      mirrors: [],
+      antenna: null,
+      roofRails: [],
+      dispose: () => Object.values(geometries).forEach((geometry) => geometry.dispose()),
+    };
+  }
   const frame: VehicleFrame = getVehicleFrame(config);
   const probe = new SurfaceProbe(probeGeometry);
   const { L, H, type } = frame;
@@ -242,7 +260,8 @@ export function buildVehicleDetails(config: VehicleConfig, probeGeometry: THREE.
     } else {
       const b = pillarX[0];
       addGap(vertical(b, doorBottom, beltAtX(b) - 0.006, side));
-      const endTop = type === "suv" && pillarX[1] !== undefined ? pillarX[1] : Math.min(glassEndX - 0.02, rearArch.x - 0.02);
+      // SUV rear door ends at the C-pillar; fastback SUVs (no C-pillar) end at the glass end.
+      const endTop = type === "suv" ? (pillarX[1] ?? glassEndX + 0.02) : Math.min(glassEndX - 0.02, rearArch.x - 0.02);
       // Rear edge: straight down from the belt, then concentric with the wheel arch (offset
       // outside the lip) down to the sill, the way real rear doors wrap the wheel.
       const R = rearArch.lipR + 0.03;
@@ -302,7 +321,11 @@ export function buildVehicleDetails(config: VehicleConfig, probeGeometry: THREE.
       return topHit(frame.xAt(s), side * hoodZ(s));
     }, 26));
   }
-  addGap(sampleLine((t) => topHit(frame.xAt(hoodS1), mix(-hoodZ(hoodS1), hoodZ(hoodS1), t)), 20));
+  // bonnet rear shut line follows the curved windshield base
+  addGap(sampleLine((t) => {
+    const z = mix(-hoodZ(hoodS1), hoodZ(hoodS1), t);
+    return topHit(frame.xAt(hoodS1) + frame.glassBowX(hoodS1, z), z);
+  }, 24));
   addGap(sampleLine((t) => topHit(frame.xAt(hoodS0), mix(-hoodZ(hoodS0), hoodZ(hoodS0), t)), 20));
 
   // Cowl panel (wiper tray) just ahead of the windshield
@@ -310,7 +333,11 @@ export function buildVehicleDetails(config: VehicleConfig, probeGeometry: THREE.
   darkTrim.addGrid(
     Array.from({ length: 17 }, (_, i) =>
       Array.from({ length: 3 }, (_, j) =>
-        topHit(frame.xAt(mix(frame.cowlS - (type === "mpv" ? 0.018 : 0.03), frame.cowlS - 0.006, j / 2)), mix(-cowlHalf, cowlHalf, i / 16)),
+        (() => {
+          const s = mix(frame.cowlS - (type === "mpv" ? 0.018 : 0.03), frame.cowlS - 0.006, j / 2);
+          const z = mix(-cowlHalf, cowlHalf, i / 16);
+          return topHit(frame.xAt(s) + frame.glassBowX(s, z), z);
+        })(),
       ),
     ),
     0.004,
@@ -325,7 +352,10 @@ export function buildVehicleDetails(config: VehicleConfig, probeGeometry: THREE.
         return topHit(frame.xAt(s), side * frame.halfWidthAt(s) * 0.76);
       }, 16));
     }
-    addGap(sampleLine((t) => topHit(frame.xAt(t0), mix(-1, 1, t) * frame.halfWidthAt(t0) * 0.76), 18));
+    addGap(sampleLine((t) => {
+      const z = mix(-1, 1, t) * frame.halfWidthAt(t0) * 0.76;
+      return topHit(frame.xAt(t0) + frame.glassBowX(t0, z), z);
+    }, 22));
     const lidY = frame.tailTop - 0.07;
     const lidZ = frame.halfWidthAt(1) * 0.76;
     addGap(sampleLine((t) => rearHit(lidY, mix(-lidZ, lidZ, t)), 20));
@@ -380,9 +410,9 @@ export function buildVehicleDetails(config: VehicleConfig, probeGeometry: THREE.
   };
 
   for (const side of sides) {
-    // Luxury MPV: slim, wide lamps set outboard of the large grille.
+    // Luxury MPV: slim, wide lamps across the upper corners of the tall face.
     const executiveQuad: Quad = [[0.66, -0.13], [0.95, -0.1], [0.95, -0.035], [0.68, -0.055]];
-    const quad = config.headlampStyle === "round" ? null : frame.style.floatingRoof ? executiveQuad : frontQuads[type];
+    const quad = config.headlampStyle === "round" ? null : frame.style.twoBoxFront ? executiveQuad : frontQuads[type];
     if (quad) {
       const lampPoint = bilinear(scaleFrontLamp(quad), side, nose);
       const grid = lampGrid(frontHit, lampPoint);
@@ -426,46 +456,13 @@ export function buildVehicleDetails(config: VehicleConfig, probeGeometry: THREE.
     rearLamps.addGrid(grid);
     runs(grid.map((column) => column[0])).forEach((line) => gaps.add(line, 0.005, 0.006));
   }
-  if (type === "sedan" || type === "suv" || frame.style.floatingRoof) {
+  if (type === "sedan" || type === "suv" || frame.style.twoBoxFront) {
     const barY = tail - (type === "sedan" ? 0.075 : 0.1);
     const grid = lampGrid(rearHit, (u, v) => [mix(-0.34, 0.34, u) * halfW, barY + v * 0.018], 16, 1);
     rearLamps.addGrid(grid, 0.0055);
   }
   const plateY = frame.floor + (tail - frame.floor) * (frame.hatchback ? 0.42 : 0.36);
   darkTrim.addGrid(lampGrid(rearHit, (u, v) => [mix(-0.26, 0.26, u), plateY + mix(-0.06, 0.06, v)], 8, 3), 0.004);
-  /* Floating roof: gloss-black B/C/D pillars so the window band reads as one glass ribbon,
-     plus a chrome line along the window sill (luxury MPV signature). */
-  const blackout = new PatchBuilder();
-  const chrome = new RibbonBuilder();
-  if (frame.style.floatingRoof) {
-    const band = (s0: number, s1: number) => {
-      for (const side of sides) {
-        blackout.addGrid(Array.from({ length: 9 }, (_, i) => {
-          const s = mix(s0, s1, i / 8);
-          const d = frame.dloAt(s);
-          return Array.from({ length: 6 }, (_, j) => sideHit(frame.xAt(s), mix(d.y7 + 0.004, d.y8 - 0.002, j / 5), side));
-        }), 0.0035);
-      }
-    };
-    const half = frame.glass.pillarHalf * 1.05;
-    frame.glass.pillars.forEach((pillar) => band(pillar - half, pillar + half));
-    const dEnd = Math.min(frame.rearGlassTopS, frame.roofRearS + 0.004);
-    band(frame.glass.end - 0.002, dEnd);
-    for (const side of sides) {
-      const line = runs(Array.from({ length: 61 }, (_, i) => {
-        const s = mix(frame.glass.start + 0.004, dEnd, i / 60);
-        return sideHit(frame.xAt(s), frame.dloAt(s).y7 - 0.012, side);
-      }));
-      line.forEach((points) => chrome.add(points, 0.014, 0.004));
-      // upper chrome surround along the glass top, down the A-pillar to the sill corner
-      const top = runs(Array.from({ length: 81 }, (_, i) => {
-        const s = mix(frame.glass.start + 0.002, dEnd, i / 80);
-        return sideHit(frame.xAt(s), frame.dloAt(s).y8 + 0.008, side);
-      }));
-      top.forEach((points) => chrome.add(points, 0.011, 0.004));
-    }
-  }
-
   /* Lower intake grille: dark panel + bezel + texture bars, projected on the front face */
   const lowerPanel = new PatchBuilder();
   const lowerFrame = new RibbonBuilder();
@@ -514,8 +511,6 @@ export function buildVehicleDetails(config: VehicleConfig, probeGeometry: THREE.
     rearLamps: rearLamps.build(),
     darkTrim: darkTrim.build(),
     lowerGrillePanel: lowerPanel.build(),
-    blackout: blackout.build(),
-    chrome: chrome.build(),
     lowerGrilleFrame: lowerFrame.build(),
     lowerGrilleBars: lowerBars.build(),
   };

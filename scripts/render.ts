@@ -13,8 +13,10 @@ const [, , templateId = "sedan-classic", out = "/tmp/render.png", view = "rear34
 const template = conceptTemplates.find((t) => t.id === templateId)!;
 const config = createTemplateConfig(template) as VehicleConfig & Record<string, unknown>;
 let cageMode = false;
+let zebraMode = false;
 for (const item of rest) {
   if (item === "cage") { cageMode = true; continue; }
+  if (item === "zebra") { zebraMode = true; continue; }
   const [k, v] = item.split("=");
   (config as Record<string, unknown>)[k] = v === "true" ? true : v === "false" ? false : Number.isNaN(Number(v)) ? v : Number(v);
 }
@@ -92,7 +94,16 @@ function draw(mesh: PatchMesh, base: [number, number, number], glass = false, wi
         const d2 = Math.max(0, n.dot(light2));
         const spec = Math.pow(Math.max(0, n.dot(light.clone().add(view).normalize())), 40) * (glass ? 0.9 : 0.25);
         const shade = 0.22 + 0.72 * d1 + 0.25 * d2;
-        for (let ch = 0; ch < 3; ch += 1) color[idx * 3 + ch] = Math.min(255, base[ch] * shade + spec * 255);
+        if (zebraMode && !glass && base[0] > 150) {
+          // Zebra: horizontal light stripes reflected in the body. Smooth (G2) surfaces give
+          // smooth, evenly bending stripes; bumps and dents show as wobbles and kinks.
+          const r = view.clone().negate().reflect(n);
+          const elevation = Math.atan2(r.y, Math.hypot(r.x, r.z));
+          const band = Math.sin(elevation * 26) > 0 ? 235 : 30;
+          for (let ch = 0; ch < 3; ch += 1) color[idx * 3 + ch] = band * (0.75 + 0.25 * Math.max(0, n.dot(light)));
+        } else {
+          for (let ch = 0; ch < 3; ch += 1) color[idx * 3 + ch] = Math.min(255, base[ch] * shade + spec * 255);
+        }
       }
     }
   };
@@ -167,8 +178,6 @@ if (!cageMode) {
   draw(toPatch(details.lowerGrilleBars), [150, 156, 154], false, false);
   draw(toPatch(details.lowerGrilleFrame), [40, 46, 50], false, false);
   draw(toPatch(details.darkTrim), [34, 40, 41], false, false);
-  draw(toPatch(details.blackout), [12, 16, 18], true, false);
-  draw(toPatch(details.chrome), [235, 240, 238], true, false);
   draw(toPatch(details.frontLamps), [40, 60, 68], true, false);
   draw(toPatch(details.rearLamps), [150, 30, 26], false, false);
   draw(toPatch(details.gaps), [8, 10, 11], false, false);

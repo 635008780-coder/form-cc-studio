@@ -13,10 +13,9 @@ import {
   SlidersHorizontal,
   Upload,
 } from "lucide-react";
-import { OBJExporter } from "three/examples/jsm/exporters/OBJExporter.js";
 import * as THREE from "three";
 import VehicleScene, { type CameraView, type DisplayMode } from "./VehicleScene";
-import { createQuadSurfaceObj } from "./quadExport";
+import { buildCadBundle, buildSubdObjects, collectSceneAccessories, unweldCreases, writeFbxScene, writeObj, zipCadBundle, zipRenderMesh, type ObjUnit } from "./exporters";
 import { conceptTemplates, createTemplateConfig, type ConceptTemplate } from "./conceptLibrary";
 import { analyzeControlMesh, type TopologyReport } from "./topologyCheck";
 import {
@@ -27,6 +26,7 @@ import {
   getWheelHousingLimits,
   vehicleNames,
   vehiclePresets,
+  isFastbackTemplate,
   wheelDiameterOptions,
   type ControlMesh,
   type VehicleConfig,
@@ -37,7 +37,7 @@ import {
   type HeadlampStyle,
 } from "./vehicleModel";
 
-const STORAGE_KEY = "form-subd-workbench-v11";
+const STORAGE_KEY = "form-subd-workbench-v17";
 
 const displayModes: Array<{ value: DisplayMode; label: string; short: string }> = [
   { value: "subd", label: "SubD 控制笼", short: "笼" },
@@ -328,42 +328,26 @@ function CarSilhouette({ type, active }: { type: VehicleType; active: boolean })
   );
 }
 
-function downloadText(filename: string, text: string, contentType: string) {
-  const blob = new Blob([text], { type: contentType });
+/** Download text or binary data. Returns the byte size actually written into the Blob. */
+function downloadFile(filename: string, data: string | Uint8Array, contentType: string) {
+  const part: BlobPart = typeof data === "string" ? data : new Uint8Array(data);
+  const blob = new Blob([part], { type: contentType });
+  if (blob.size === 0) throw new Error("empty export");
   const url = URL.createObjectURL(blob);
   const anchor = document.createElement("a");
   anchor.href = url;
   anchor.download = filename;
+  anchor.rel = "noopener";
+  anchor.style.display = "none";
   document.body.appendChild(anchor);
   anchor.click();
   anchor.remove();
-  window.setTimeout(() => URL.revokeObjectURL(url), 1200);
+  // Revoke late: large files and some browsers read the Blob after the click returns.
+  window.setTimeout(() => URL.revokeObjectURL(url), 60000);
+  return blob.size;
 }
 
-function createCageObj(mesh: ControlMesh) {
-  const mm = (value: number) => (value * 1000).toFixed(3);
-  const lines = [
-    "# FORM SubD vehicle control cage",
-    "# Units: mm | X length / Y up / Z width | all-quad Catmull-Clark cage",
-    `# Groups: BODY_SHELL (single continuous surface), SIDE_GLASS, WINDSHIELD, REAR_GLASS${mesh.grille.faces.length ? ", GRILLE" : ""}`,
-    ...mesh.creases.map(({ a, b, weight, feature }) => `# crease ${a + 1} ${b + 1} ${weight.toFixed(2)} ${feature}`),
-  ];
-  mesh.vertices.forEach((v) => lines.push(`v ${mm(v[0])} ${mm(v[1])} ${mm(v[2])}`));
-  const grilleOffset = mesh.vertices.length;
-  mesh.grille.vertices.forEach((v) => lines.push(`v ${mm(v[0])} ${mm(v[1])} ${mm(v[2])}`));
-  const group = (name: string, faces: number[][], offset = 0) => {
-    if (faces.length === 0) return;
-    lines.push(`g ${name}`);
-    faces.forEach((face) => lines.push(`f ${face.map((index) => index + 1 + offset).join(" ")}`));
-  };
-  group("BODY_SHELL", mesh.faces);
-  group("SIDE_GLASS", mesh.sideGlass);
-  group("WINDSHIELD", mesh.windshield);
-  group("REAR_GLASS", mesh.rearGlass);
-  group("GRILLE", mesh.grille.faces, grilleOffset);
-  lines.push("");
-  return lines.join("\n");
-}
+const formatSize = (bytes: number) => (bytes > 1048576 ? `${(bytes / 1048576).toFixed(1)} MB` : `${Math.max(1, Math.round(bytes / 1024))} KB`);
 
 function createControlJson(config: VehicleConfig, mesh: ControlMesh) {
   const mm = (point: number[]) => point.map((coordinate) => Number((coordinate * 1000).toFixed(3)));
@@ -497,6 +481,7 @@ function parseVehicleProject(input: unknown): VehicleConfig | null {
   config.wheelDiameterInches = Math.round(config.wheelDiameterInches);
   if (typeof source.hasGrille === "boolean") config.hasGrille = source.hasGrille;
   if (typeof source.hasLowerGrille === "boolean") config.hasLowerGrille = source.hasLowerGrille;
+  if (typeof source.hasSpoiler === "boolean") config.hasSpoiler = source.hasSpoiler;
   if (source.tireStyle === "road" || source.tireStyle === "allTerrain") config.tireStyle = source.tireStyle;
   if (source.cageDensity === "compact" || source.cageDensity === "balanced" || source.cageDensity === "detailed") config.cageDensity = source.cageDensity;
   if (source.headlampStyle === "wide" || source.headlampStyle === "round") config.headlampStyle = source.headlampStyle;
@@ -530,15 +515,18 @@ function App() {
   const [showDimensions, setShowDimensions] = useState(false);
   const [expanded, setExpanded] = useState({ proportions: true, wheels: false, cabin: false, surface: false, fascia: true, rear: false, topology: false });
   const [exportOpen, setExportOpen] = useState(false);
+  const [objUnit, setObjUnit] = useState<ObjUnit>("cm");
   const [toast, setToast] = useState("");
   const [previewConfig, setPreviewConfig] = useState(config);
   const exportGroupRef = useRef<THREE.Group>(null);
   const toastTimer = useRef<number | undefined>(undefined);
   const exportMenuRef = useRef<HTMLDivElement>(null);
   const importInputRef = useRef<HTMLInputElement>(null);
-  // A short pause coalesces slider events before expensive SubD and BVH evaluation.
+  // Single full-quality update path: body and trims are always built together (no draft
+  // stage), so accessories never disappear or lag behind the body. A short pause coalesces
+  // slider events before the SubD and BVH evaluation.
   useEffect(() => {
-    const timer = window.setTimeout(() => setPreviewConfig(config), 70);
+    const timer = window.setTimeout(() => setPreviewConfig(config), 60);
     return () => window.clearTimeout(timer);
   }, [config]);
   const deferredConfig = useDeferredValue(previewConfig);
@@ -653,71 +641,65 @@ function App() {
     }
   };
 
-  const downloadEvaluatedObj = () => {
-    if (isModelPending) {
-      notify("模型正在更新，请稍后再导出整车");
-      return;
-    }
+  /** Current cage (never stale) and, when the viewport is in sync, its accessories. */
+  const exportSources = () => {
+    const cage = isModelPending ? buildControlMesh(config) : controlMesh;
     const group = exportGroupRef.current;
-    if (!group) {
-      notify("3D 视口尚未完成初始化，请稍后再试");
+    const accessories = group && !isModelPending ? collectSceneAccessories(group) : [];
+    return { cage, accessories };
+  };
+
+  const runExport = (label: string, action: () => number) => {
+    try {
+      const size = action();
+      notify(`${label}已导出（${formatSize(size)}）`);
+    } catch (error) {
+      console.error(error);
+      notify(`${label}导出失败，请稍后重试`);
+    }
+    setExportOpen(false);
+  };
+
+  const downloadCadPackage = () => runExport("细分工程包", () => {
+    const { cage, accessories } = exportSources();
+    const bundle = buildCadBundle(cage, config, accessories, baseName, objUnit);
+    return downloadFile(`${baseName}_SUBD_PACKAGE.zip`, zipCadBundle(bundle, baseName), "application/zip");
+  });
+
+  const downloadFbx = () => runExport("细分体 FBX", () => {
+    const { cage, accessories } = exportSources();
+    return downloadFile(`${baseName}_SUBD.fbx`, writeFbxScene([...buildSubdObjects(cage, config), ...accessories]), "application/octet-stream");
+  });
+
+  const downloadCage = () => runExport("控制笼 OBJ", () => {
+    const { cage } = exportSources();
+    const header = ["FORM Subdivision Studio - Catmull-Clark control cage", "X towards rear", "Alias: File > Import > Subdiv"];
+    return downloadFile(`${baseName}_SUBD_CAGE.obj`, writeObj(buildSubdObjects(cage, config), null, header, objUnit), "text/plain;charset=utf-8");
+  });
+
+  const downloadRhino = () => runExport("Rhino SubD OBJ", () => {
+    const { cage } = exportSources();
+    const objects = buildSubdObjects(cage, config).map((object) => unweldCreases(object));
+    const header = ["FORM Subdivision Studio - Rhino SubD cage (hard creases unwelded)", "Rhino: _Import, then _ToSubD with creases enabled"];
+    return downloadFile(`${baseName}_RHINO_SUBD.obj`, writeObj(objects, null, header, objUnit), "text/plain;charset=utf-8");
+  });
+
+  const downloadRenderMesh = () => {
+    if (isModelPending) {
+      notify("模型正在更新，请稍后再导出渲染网格");
       return;
     }
-
-    try {
-      group.updateWorldMatrix(true, true);
-      const exportRoot = new THREE.Group();
-      let objectIndex = 0;
-      group.traverse((child) => {
-        if (child.userData.exportIgnore) return;
-        if (!(child instanceof THREE.Mesh) && !(child instanceof THREE.LineSegments)) return;
-        if (!child.geometry.getAttribute("position")?.count) return;
-        const copy = child.clone(false);
-        copy.name = child.name || `DETAIL_${++objectIndex}`;
-        copy.matrixAutoUpdate = false;
-        copy.matrix.copy(child.matrixWorld);
-        copy.visible = true;
-        exportRoot.add(copy);
-      });
-      exportRoot.updateMatrixWorld(true);
-      const raw = new OBJExporter().parse(exportRoot);
-      const millimeterObj = raw.replace(/^v\s+(-?[\d.eE+-]+)\s+(-?[\d.eE+-]+)\s+(-?[\d.eE+-]+)/gm, (_match, x, y, z) => {
-        return `v ${(Number(x) * 1000).toFixed(4)} ${(Number(y) * 1000).toFixed(4)} ${(Number(z) * 1000).toFixed(4)}`;
-      });
-      downloadText(`${baseName}_EVALUATED_MM.obj`, `# Units: mm\n${millimeterObj}`, "text/plain;charset=utf-8");
-      notify("细分结果 OBJ 已导出，单位 mm");
-    } catch {
-      notify("OBJ 导出失败，请重新载入视口后再试");
-    }
-    setExportOpen(false);
+    runExport("渲染网格", () => {
+      const { cage, accessories } = exportSources();
+      return downloadFile(`${baseName}_RENDER_MESH.zip`, zipRenderMesh(cage, config, accessories, baseName, objUnit), "application/zip");
+    });
   };
 
-  const downloadCage = () => {
-    const mesh = buildControlMesh(config);
-    downloadText(`${baseName}_SUBD_CAGE_MM.obj`, createCageObj(mesh), "text/plain;charset=utf-8");
-    notify(`四边面控制笼已导出，${mesh.vertices.length} 个控制点`);
-    setExportOpen(false);
-  };
-
-  const downloadQuadSurface = () => {
-    try {
-      downloadText(`${baseName}_SUBD_QUADS_MM.obj`, createQuadSurfaceObj(isModelPending ? buildControlMesh(config) : controlMesh), "text/plain;charset=utf-8");
-      notify("细分后的四边面车身与玻璃已导出，单位 mm");
-    } catch {
-      notify("四边面导出失败，请检查当前参数");
-    }
-    setExportOpen(false);
-  };
-
-  const downloadJson = () => {
-    downloadText(
-      `${baseName}_PARAMETERS.json`,
-      createControlJson(config, isModelPending ? buildControlMesh(config) : controlMesh),
-      "application/json;charset=utf-8",
-    );
-    notify("参数与控制点 JSON 已导出");
-    setExportOpen(false);
-  };
+  const downloadJson = () => runExport("参数 JSON", () => downloadFile(
+    `${baseName}_PARAMETERS.json`,
+    createControlJson(config, isModelPending ? buildControlMesh(config) : controlMesh),
+    "application/json;charset=utf-8",
+  ));
 
   const toggleSection = (section: keyof typeof expanded) => {
     setExpanded((current) => ({ ...current, [section]: !current[section] }));
@@ -761,20 +743,38 @@ function App() {
             </button>
             {exportOpen && (
               <div className="export-menu">
-                <div className="export-menu-heading">模型文件</div>
+                <div className="export-menu-heading">可编辑细分曲面（SubD）</div>
+                <button className="export-option export-option-primary" onClick={downloadCadPackage} type="button">
+                  <span className="export-option-icon"><Layers size={15} /></span>
+                  <span><strong>细分工程包（推荐）</strong><small>ZIP · FBX + OBJ 控制笼 + Rhino OBJ + 导入说明</small></span>
+                  <ArrowDownToLine size={14} />
+                </button>
+                <button className="export-option" onClick={downloadFbx} type="button">
+                  <span className="export-option-icon"><Layers size={15} /></span>
+                  <span><strong>Alias / Blender / Maya 细分体</strong><small>FBX · 细分标记 + 折边权重 + 材质 + 配件</small></span>
+                  <ArrowDownToLine size={14} />
+                </button>
                 <button className="export-option" onClick={downloadCage} type="button">
                   <span className="export-option-icon"><Layers size={15} /></span>
-                  <span><strong>SubD 控制笼</strong><small>OBJ · 四边面 · mm</small></span>
+                  <span><strong>SubD 控制笼</strong><small>OBJ · Alias「Import › Subdiv」· 四边面 · mm</small></span>
                   <ArrowDownToLine size={14} />
                 </button>
-                <button className="export-option" onClick={downloadQuadSurface} type="button">
+                <button className="export-option" onClick={downloadRhino} type="button">
                   <span className="export-option-icon"><Layers size={15} /></span>
-                  <span><strong>细分车身四边面</strong><small>OBJ · 车身 / 玻璃 / 格栅 · 无三角面</small></span>
+                  <span><strong>Rhino SubD</strong><small>OBJ · 硬折边已断开 · 导入后 ToSubD</small></span>
                   <ArrowDownToLine size={14} />
                 </button>
-                <button className="export-option" onClick={downloadEvaluatedObj} type="button">
+                <div className="export-unit-row" role="group" aria-label="OBJ 单位">
+                  <span>OBJ 单位</span>
+                  {(["mm", "cm", "m"] as const).map((unit) => (
+                    <button key={unit} type="button" className={objUnit === unit ? "export-unit-active" : ""} aria-pressed={objUnit === unit} onClick={() => setObjUnit(unit)}>{unit}</button>
+                  ))}
+                  <small>Alias 默认 cm · Rhino mm · Blender m</small>
+                </div>
+                <div className="export-menu-heading">渲染与数据</div>
+                <button className="export-option" onClick={downloadRenderMesh} type="button">
                   <span className="export-option-icon"><Download size={15} /></span>
-                  <span><strong>细分后整车</strong><small>OBJ · 含车轮与细节，三角网格</small></span>
+                  <span><strong>渲染网格</strong><small>ZIP · OBJ + MTL · 细分结果 + 车轮配件</small></span>
                   <ArrowDownToLine size={14} />
                 </button>
                 <button className="export-option" onClick={downloadJson} type="button">
@@ -786,7 +786,7 @@ function App() {
                   <span className="export-option-icon"><Upload size={15} /></span>
                   <span><strong>载入方案参数</strong><small>选择本工作台导出的 JSON</small></span>
                 </button>
-                <div className="export-note">控制笼和细分车身均提供四边面 OBJ；WebGL 预览及含车轮的整车文件仍用渲染三角面。硬化权重在 JSON 中。</div>
+                <div className="export-note">Z 轴向上，FBX 自带毫米单位。Alias：FBX 用 File › Open（保留折边），OBJ 用 File › Import › Subdiv。Blender 导入 FBX 时勾选「Subdivision Data」。Rhino：导入后运行 ToSubD。</div>
               </div>
             )}
           </div>
@@ -1068,7 +1068,7 @@ function App() {
                   />
                   <ParameterField label="前灯宽度" value={config.headlampWidth} min={60} max={130} step={1} unit="%" onChange={(value) => updateParameter("headlampWidth", value)} />
                   <ParameterField label="前灯高度" value={config.headlampHeight} min={60} max={140} step={1} unit="%" onChange={(value) => updateParameter("headlampHeight", value)} />
-                  <div className="inline-note"><span className="link-mark" />{!config.hasGrille ? "封闭前脸采用 7 列 × 6 行规则四边面，所有控制点位于同一连续凸曲面，无内凹框" : config.type === "mpv" && config.templateId === "mpv-executive" ? "豪华商务 MPV：直立高前脸 + 短机盖两段式车头，腰线在滑门后上扬，黑色悬浮立柱与镀铬窗框" : config.type === "mpv" ? "MPV 机盖与前挡使用连续升高剖面，风挡根部不再保留水平台阶" : "格栅开口沿统一凸面前脸布线，带内翻边与饰圈；轮眉通过整体抬升机盖平面保证间隙"}</div>
+                  <div className="inline-note"><span className="link-mark" />{!config.hasGrille ? "封闭前脸采用 7 列 × 6 行规则四边面，所有控制点位于同一连续凸曲面，无内凹框" : config.type === "mpv" && config.templateId === "mpv-executive" ? "商务 MPV：独立前舱 + 后倾 A 柱，弧形车顶，腰线在滑门后上扬" : config.type === "mpv" ? "MPV 机盖与前挡使用连续升高剖面，风挡根部不再保留水平台阶" : "格栅开口沿统一凸面前脸布线，带内翻边与饰圈；轮眉通过整体抬升机盖平面保证间隙"}</div>
                 </div>
               )}
             </div>
@@ -1077,7 +1077,16 @@ function App() {
               <SectionHeader title="车尾与整体轮廓" subtitle="REAR / SILHOUETTE" open={expanded.rear} onClick={() => toggleSection("rear")} />
               {expanded.rear && (
                 <div className="parameter-fields">
-                  <ParameterField label={config.type === "sedan" ? "后窗前后投影（占车长）" : `后窗倾角（每档 2.5°，当前 ${(config.rearGlassSpan * 2.5).toFixed(1)}°）`} value={config.rearGlassSpan} min={2} max={18} step={1} unit={config.type === "sedan" ? "%" : "档"} onChange={(value) => updateParameter("rearGlassSpan", value)} />
+                  <ParameterField label={config.type === "sedan" ? "后窗前后投影（占车长）" : `后窗倾角（当前 ${(isFastbackTemplate(config.templateId) ? (config.hasSpoiler ? Math.min(60, Math.max(22, config.rearGlassSpan * 2.5)) : Math.min(70, Math.max(40, config.rearGlassSpan * 2.5 + 18))) : config.rearGlassSpan * 2.5).toFixed(1)}°）`} value={config.rearGlassSpan} min={2} max={18} step={1} unit={config.type === "sedan" ? "%" : "档"} onChange={(value) => updateParameter("rearGlassSpan", value)} />
+                  {isFastbackTemplate(config.templateId) && <ChoiceField<"with" | "without">
+                    label="车顶尾翼（与车顶一体）"
+                    value={config.hasSpoiler ? "with" : "without"}
+                    options={[
+                      { value: "with", label: "有尾翼" },
+                      { value: "without", label: "无尾翼" },
+                    ]}
+                    onChange={(value) => setConfig((current) => ({ ...current, hasSpoiler: value === "with" }))}
+                  />}
                   {config.type === "sedan" && <ParameterField label="后备厢盖末端位置" value={config.tailDeckPercent} min={88} max={98} step={1} unit="%" onChange={(value) => updateParameter("tailDeckPercent", value)} />}
                   <ParameterField label={config.type !== "sedan" ? "后窗下沿高度（占车高）" : "车尾高度（占车高）"} value={config.tailHeightPercent} min={config.type === "sedan" ? 42 : 60} max={config.type === "sedan" ? 78 : 77} step={1} unit="%" onChange={(value) => updateParameter("tailHeightPercent", value)} />
                   <ParameterField label="车尾高度微调" value={config.rearHeightOffset} min={-120} max={120} unit="mm" onChange={(value) => updateParameter("rearHeightOffset", value)} />

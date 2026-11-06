@@ -254,7 +254,9 @@ input:focus-visible {
   z-index: 30;
   top: calc(100% + 9px);
   right: 0;
-  width: 288px;
+  width: 318px;
+  max-height: min(78vh, 640px);
+  overflow-y: auto;
   padding: 9px;
   border: 1px solid #354146;
   border-radius: 5px;
@@ -289,6 +291,52 @@ input:focus-visible {
 .export-option:hover {
   color: #f0ede7;
   background: #252f33;
+}
+
+.export-unit-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 5px;
+  margin: 4px 9px 2px;
+  color: #849194;
+  font-size: 11px;
+}
+
+.export-unit-row > span {
+  margin-right: 4px;
+}
+
+.export-unit-row button {
+  padding: 3px 9px;
+  border: 1px solid #354146;
+  border-radius: 3px;
+  background: transparent;
+  color: #aab3b2;
+  cursor: pointer;
+  font-size: 11px;
+}
+
+.export-unit-row button.export-unit-active {
+  border-color: #e07a3c;
+  color: #f0ede7;
+  background: rgba(224, 122, 60, 0.16);
+}
+
+.export-unit-row small {
+  width: 100%;
+  color: #6c787b;
+  font-size: 10px;
+}
+
+.export-option-primary {
+  color: #f0ede7;
+  background: rgba(224, 122, 60, 0.12);
+  box-shadow: inset 2px 0 0 #e07a3c;
+}
+
+.export-option-primary:hover {
+  background: rgba(224, 122, 60, 0.2);
 }
 
 .export-option > span:nth-child(2) {
